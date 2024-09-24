@@ -1511,7 +1511,22 @@ The name is expected to be unique for each remote clusters.
 - xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remotecluster[$$RemoteCluster$$]
 ****
 
+[cols="25a,75a", options="header"]
+|===
+| Field | Description
+| *`access`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusteraccess[$$RemoteClusterAccess$$]__ | Access is the name of the API Key. It is automatically generated if not set or empty.
+|===
 
+
+[id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusteraccess"]
+=== RemoteClusterAccess 
+
+
+
+.Appears In:
+****
+- xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey[$$RemoteClusterAPIKey$$]
+****
 
 
 
