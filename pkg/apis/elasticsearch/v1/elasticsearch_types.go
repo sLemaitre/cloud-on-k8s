@@ -206,6 +206,9 @@ type RemoteCluster struct {
 	// ElasticsearchRef is a reference to an Elasticsearch cluster running within the same k8s cluster.
 	ElasticsearchRef commonv1.LocalObjectSelector `json:"elasticsearchRef,omitempty"`
 
+	// +kubebuilder:validation:Optional
+	APIKey *RemoteClusterAPIKey `json:"apiKey,omitempty"`
+
 	// TODO: Allow the user to specify some options (transport.compress, transport.ping_schedule)
 
 }

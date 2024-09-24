@@ -1497,7 +1497,22 @@ RemoteCluster declares a remote Elasticsearch cluster connection.
 | *`name`* __string__ | Name is the name of the remote cluster as it is set in the Elasticsearch settings.
 The name is expected to be unique for each remote clusters.
 | *`elasticsearchRef`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-common-v1-localobjectselector[$$LocalObjectSelector$$]__ | ElasticsearchRef is a reference to an Elasticsearch cluster running within the same k8s cluster.
+| *`apiKey`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey[$$RemoteClusterAPIKey$$]__ | 
 |===
+
+
+[id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey"]
+=== RemoteClusterAPIKey 
+
+
+
+.Appears In:
+****
+- xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remotecluster[$$RemoteCluster$$]
+****
+
+
+
 
 
 [id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-rolesource"]

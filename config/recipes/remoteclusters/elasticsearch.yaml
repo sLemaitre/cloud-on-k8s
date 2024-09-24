@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns1
+---
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: cluster1
+  namespace: ns1
+spec:
+  version: 8.15.0
+  remoteClusters:
+    - name: first-rc
+
+    - name: second-rc
+  nodeSets:
+    - name: default
+      config:
+        node.store.allow_mmap: false
+      count: 3
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns2
+---
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: cluster2
+  namespace: ns2
+spec:
+  version: 8.15.0
+  nodeSets:
+    - name: default
+      config:
+        node.store.allow_mmap: false
+      count: 3
