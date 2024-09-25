@@ -26,7 +26,7 @@ type Search struct {
 	Names []string `json:"names,omitempty"`
 
 	// +kubebuilder:validation:Optional
-	FieldSecurity *FieldSecurity `json:"field_security"`
+	FieldSecurity *FieldSecurity `json:"field_security,omitempty"`
 }
 
 type FieldSecurity struct {

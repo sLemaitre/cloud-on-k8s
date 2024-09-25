@@ -6,6 +6,8 @@ package remotecluster
 
 import (
 	"context"
+	"fmt"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/hash"
 	"sort"
 
 	"go.elastic.co/apm/v2"
@@ -110,19 +112,25 @@ func updateSettingsInternal(
 
 	remoteClustersToUpdate := make([]string, 0, len(remoteClustersInSpec)) // only used for logging
 	// remoteClustersToApply are clusters to add (or update) based on what is specified in the Elasticsearch spec.
-	remoteClustersToApply := make(map[string]esclient.RemoteCluster)
+	remoteClustersToApply := make(remoteClusterChangesToApply)
 	for name, remoteCluster := range remoteClustersInSpec {
 		remoteClustersToUpdate = append(remoteClustersToUpdate, name)
 		// Declare remote cluster in ES
 		seedHosts := []string{services.ExternalTransportServiceHost(remoteCluster.ElasticsearchRef.NamespacedName())}
-		remoteClustersToApply[name] = esclient.RemoteCluster{Seeds: seedHosts}
+		remoteClustersToApply[name] = remoteClusterToApply{
+			remoteClusterSettings: esclient.RemoteCluster{Seeds: seedHosts},
+			apiKey:                remoteCluster.APIKey.DeepCopy(),
+		}
 		// Ensure this cluster is tracked in the annotation
 		remoteClustersInAnnotation[name] = struct{}{}
 	}
 
 	// RemoteClusters to remove from Elasticsearch
 	for _, name := range remoteClustersToDelete {
-		remoteClustersToApply[name] = esclient.RemoteCluster{Seeds: nil}
+		remoteClustersToApply[name] = remoteClusterToApply{
+			remoteClusterSettings: esclient.RemoteCluster{Seeds: nil},
+			isDeleted:             true,
+		}
 	}
 
 	// Update the annotation
@@ -143,9 +151,85 @@ func updateSettingsInternal(
 			"updated_remote_clusters", remoteClustersToUpdate,
 			"deleted_remote_clusters", remoteClustersToDelete,
 		)
-		return requeue, updateSettings(ctx, esClient, remoteClustersToApply)
+
+		for name, remoteClusterChange := range remoteClustersToApply {
+			if remoteClusterChange.apiKey == nil || remoteClusterChange.isDeleted {
+				// Only ensure that we don't have an API Key and that the API Key is not in the ES KeyStore
+				continue
+			}
+			// We assume here that remoteClusterChange.apiKey is not nil
+			// Ensure that we have a valid API Key
+			// 1. Get the API Key
+			apiKeyName := fmt.Sprintf("eck-%s-%s-%s", es.Namespace, es.Name, name)
+			activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, apiKeyName)
+			if err != nil {
+				return false, err
+			}
+			activeAPIKey, err := activeAPIKeys.GetActiveKey()
+			if err != nil {
+				return false, fmt.Errorf("error while retrieving active API Key for remote cluster %s: %w", name, err)
+			}
+			// 2.1 If not exist create it
+			expectedHash := hash.HashObject(*remoteClusterChange.apiKey)
+			if activeAPIKey == nil {
+				_, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
+					Name: apiKeyName,
+					CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
+						RemoteClusterAPIKey: *remoteClusterChange.apiKey,
+						Metadata: map[string]interface{}{
+							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+						},
+					},
+				})
+				if err != nil {
+					return false, err
+				}
+			}
+
+			if activeAPIKey != nil {
+				currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
+				if currentHash != expectedHash {
+					// Update the Key
+					_, err := esClient.UpdateCrossClusterAPIKey(ctx, activeAPIKey.ID, esclient.CrossClusterAPIKeyUpdateRequest{
+						RemoteClusterAPIKey: *remoteClusterChange.apiKey,
+						Metadata: map[string]interface{}{
+							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+						},
+					})
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+
+			// 2.2 If exists ensure that the access field is the expected one using the hash
+
+			// 2. Ensure that the API Key is in the Elasticsearch keystore
+		}
+
+		// Update the Elasticsearch settings
+		return requeue, updateSettings(ctx, esClient, remoteClustersToApply.ToElasticsearchSettings())
 	}
 	return requeue, nil
+}
+
+type remoteClusterChangesToApply map[string]remoteClusterToApply
+
+type remoteClusterToApply struct {
+	isDeleted             bool
+	remoteClusterSettings esclient.RemoteCluster
+	apiKey                *esv1.RemoteClusterAPIKey
+}
+
+func (rca *remoteClusterChangesToApply) ToElasticsearchSettings() map[string]esclient.RemoteCluster {
+	if rca == nil {
+		return nil
+	}
+	result := make(map[string]esclient.RemoteCluster, len(*rca))
+	for name, change := range *rca {
+		result[name] = change.remoteClusterSettings
+	}
+	return result
 }
 
 // getRemoteClustersInElasticsearch returns all the remote clusters currently declared in Elasticsearch

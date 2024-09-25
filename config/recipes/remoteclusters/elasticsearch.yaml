@@ -12,19 +12,35 @@ spec:
   version: 8.15.0
   remoteClusters:
     - name: first-rc
+      elasticsearchRef:
+        name: cluster2
+        namespace: ns2
       apiKey:
         access:
-          names:
-            - bar
-        replication:
-          names:
-            - foo
+          search:
+            names:
+              - bar
+              - bla
+          replication:
+            names:
+              - foo
     - name: second-rc
   nodeSets:
     - name: default
       config:
         node.store.allow_mmap: false
       count: 3
+---
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: kibana
+  namespace: ns1
+spec:
+  version: 8.15.0
+  count: 1
+  elasticsearchRef:
+    name: "cluster1"
 ---
 apiVersion: v1
 kind: Namespace
@@ -43,3 +59,14 @@ spec:
       config:
         node.store.allow_mmap: false
       count: 3
+---
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: kibana
+  namespace: ns2
+spec:
+  version: 8.15.0
+  count: 1
+  elasticsearchRef:
+    name: "cluster2"
