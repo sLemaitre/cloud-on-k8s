@@ -12,7 +12,13 @@ spec:
   version: 8.15.0
   remoteClusters:
     - name: first-rc
-
+      apiKey:
+        access:
+          names:
+            - bar
+        replication:
+          names:
+            - foo
     - name: second-rc
   nodeSets:
     - name: default

@@ -4,6 +4,7 @@
 
 package v1
 
+// RemoteClusterAPIKey defines a remote cluster API Key.
 type RemoteClusterAPIKey struct {
 	// Expiration date. If set the key is automatically renewed by ECK.
 	//Expiration *metav1.Duration `json:"name,omitempty"`
@@ -14,5 +15,26 @@ type RemoteClusterAPIKey struct {
 }
 
 type RemoteClusterAccess struct {
-	//Search struct{} `json:"search,omitempty"`
+	// +kubebuilder:validation:Optional
+	Search *Search `json:"search,omitempty"`
+	// +kubebuilder:validation:Optional
+	Replication *Replication `json:"replication,omitempty"`
+}
+
+type Search struct {
+	// +kubebuilder:validation:Required
+	Names []string `json:"names,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	FieldSecurity *FieldSecurity `json:"field_security"`
+}
+
+type FieldSecurity struct {
+	Grant  []string `json:"grant"`
+	Except []string `json:"except"`
+}
+
+type Replication struct {
+	// +kubebuilder:validation:Required
+	Names []string `json:"names,omitempty"`
 }

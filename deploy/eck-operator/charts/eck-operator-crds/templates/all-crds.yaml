@@ -4844,10 +4844,45 @@ spec:
                     connection.
                   properties:
                     apiKey:
+                      description: RemoteClusterAPIKey defines a remote cluster API
+                        Key.
                       properties:
                         access:
                           description: Access is the name of the API Key. It is automatically
                             generated if not set or empty.
+                          properties:
+                            replication:
+                              properties:
+                                names:
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - names
+                              type: object
+                            search:
+                              properties:
+                                field_security:
+                                  properties:
+                                    except:
+                                      items:
+                                        type: string
+                                      type: array
+                                    grant:
+                                      items:
+                                        type: string
+                                      type: array
+                                  required:
+                                  - except
+                                  - grant
+                                  type: object
+                                names:
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - names
+                              type: object
                           type: object
                       required:
                       - access

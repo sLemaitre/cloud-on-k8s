@@ -1384,6 +1384,24 @@ controller has not yet processed the changes contained in the Elasticsearch spec
 |===
 
 
+[id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-fieldsecurity"]
+=== FieldSecurity 
+
+
+
+.Appears In:
+****
+- xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-search[$$Search$$]
+****
+
+[cols="25a,75a", options="header"]
+|===
+| Field | Description
+| *`grant`* __string array__ | 
+| *`except`* __string array__ | 
+|===
+
+
 [id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-filerealmsource"]
 === FileRealmSource 
 
@@ -1504,7 +1522,7 @@ The name is expected to be unique for each remote clusters.
 [id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey"]
 === RemoteClusterAPIKey 
 
-
+RemoteClusterAPIKey defines a remote cluster API Key.
 
 .Appears In:
 ****
@@ -1528,6 +1546,29 @@ The name is expected to be unique for each remote clusters.
 - xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey[$$RemoteClusterAPIKey$$]
 ****
 
+[cols="25a,75a", options="header"]
+|===
+| Field | Description
+| *`search`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-search[$$Search$$]__ | 
+| *`replication`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-replication[$$Replication$$]__ | 
+|===
+
+
+[id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-replication"]
+=== Replication 
+
+
+
+.Appears In:
+****
+- xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusteraccess[$$RemoteClusterAccess$$]
+****
+
+[cols="25a,75a", options="header"]
+|===
+| Field | Description
+| *`names`* __string array__ | 
+|===
 
 
 [id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-rolesource"]
@@ -1544,6 +1585,24 @@ RoleSource references roles to create in the Elasticsearch cluster.
 |===
 | Field | Description
 | *`secretName`* __string__ | SecretName is the name of the secret.
+|===
+
+
+[id="{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-search"]
+=== Search 
+
+
+
+.Appears In:
+****
+- xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusteraccess[$$RemoteClusterAccess$$]
+****
+
+[cols="25a,75a", options="header"]
+|===
+| Field | Description
+| *`names`* __string array__ | 
+| *`field_security`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-fieldsecurity[$$FieldSecurity$$]__ | 
 |===
 
 
