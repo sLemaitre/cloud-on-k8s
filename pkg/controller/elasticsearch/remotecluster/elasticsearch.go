@@ -186,6 +186,7 @@ func updateSettingsInternal(
 				}
 			}
 
+			// 2.2 If exists ensure that the access field is the expected one using the hash
 			if activeAPIKey != nil {
 				currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
 				if currentHash != expectedHash {
@@ -202,9 +203,8 @@ func updateSettingsInternal(
 				}
 			}
 
-			// 2.2 If exists ensure that the access field is the expected one using the hash
+			// 3. Ensure that the API Key is in the Elasticsearch keystore
 
-			// 2. Ensure that the API Key is in the Elasticsearch keystore
 		}
 
 		// Update the Elasticsearch settings

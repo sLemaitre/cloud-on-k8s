@@ -40,6 +40,9 @@ const (
 	// remoteCaNameSuffix is a suffix for the secret that contains the concatenation of all the remote CAs
 	remoteCaNameSuffix = "remote-ca"
 
+	// remoteCredentialsNameSuffix is a suffix for the secret that contains the API keys for the remote clusters.
+	remoteAPIKeysNameSuffix = "remote-api-keys"
+
 	controllerRevisionHashLen = 10
 )
 
@@ -60,6 +63,7 @@ var (
 		scriptsConfigMapSuffix,
 		statefulSetTransportCertificatesSecretSuffix,
 		remoteCaNameSuffix,
+		remoteAPIKeysNameSuffix,
 	}
 )
 
@@ -171,6 +175,10 @@ func DefaultPodDisruptionBudget(esName string) string {
 
 func RemoteCaSecretName(esName string) string {
 	return ESNamer.Suffix(esName, remoteCaNameSuffix)
+}
+
+func RemoteAPIKeysSecretName(esName string) string {
+	return ESNamer.Suffix(esName, remoteAPIKeysNameSuffix)
 }
 
 func FileSettingsSecretName(esName string) string {
