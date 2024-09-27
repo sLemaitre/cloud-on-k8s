@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/keystore"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +39,13 @@ type APIKeyStore struct {
 	aliases map[string]string
 	// keys maps the ID of an API Key (not its name), to the encoded cross-cluster API key.
 	keys map[string]string
+}
+
+func (aks *APIKeyStore) KeyIDFor(alias string) string {
+	if aks == nil {
+		return ""
+	}
+	return aks.aliases[alias]
 }
 
 func LoadAPIKeyStore(ctx context.Context, c k8s.Client, owner *esv1.Elasticsearch) (*APIKeyStore, error) {
@@ -163,3 +172,38 @@ func (aks *APIKeyStore) IsEmpty() bool {
 	}
 	return len(aks.aliases) == 0
 }
+
+func WithRemoteClusterAPIKeys(ctx context.Context, es *esv1.Elasticsearch, c k8s.Client) (keystore.HasKeystore, error) {
+	extendedKeystore := &ExtendedKeystore{
+		Elasticsearch:  es,
+		secureSettings: es.SecureSettings(),
+	}
+	// Check if Secret exists
+	secretName := types.NamespacedName{
+		Name:      esv1.RemoteAPIKeysSecretName(es.Name),
+		Namespace: es.Namespace,
+	}
+	if err := c.Get(ctx, secretName, &corev1.Secret{}); err != nil {
+		if errors.IsNotFound(err) {
+			return extendedKeystore, nil
+		}
+		return nil, err
+	}
+	// Add the Secret that holds the API Keys
+	extendedKeystore.secureSettings = append(extendedKeystore.secureSettings, commonv1.SecretSource{SecretName: secretName.Name})
+	return extendedKeystore, nil
+}
+
+type ExtendedKeystore struct {
+	*esv1.Elasticsearch
+	secureSettings []commonv1.SecretSource
+}
+
+func (eks *ExtendedKeystore) SecureSettings() []commonv1.SecretSource {
+	if eks == nil {
+		return nil
+	}
+	return eks.secureSettings
+}
+
+var _ keystore.HasKeystore = &ExtendedKeystore{}

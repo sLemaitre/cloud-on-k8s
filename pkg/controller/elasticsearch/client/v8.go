@@ -53,6 +53,10 @@ func (c *clientV8) GetCrossClusterAPIKeys(ctx context.Context, name string) (Cro
 	return response, err
 }
 
+func (c *clientV8) InvalidateCrossClusterAPIKey(ctx context.Context, name string) error {
+	return c.deleteWithObjects(ctx, "/_security/api_key", CrossClusterAPIKeyInvalidateRequest{Name: name}, nil)
+}
+
 // Equal returns true if c2 can be considered the same as c
 func (c *clientV8) Equal(c2 Client) bool {
 	other, ok := c2.(*clientV8)

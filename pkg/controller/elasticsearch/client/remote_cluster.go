@@ -21,10 +21,16 @@ type RemoteClusterClient interface {
 	CreateCrossClusterAPIKey(context.Context, CrossClusterAPIKeyCreateRequest) (CrossClusterAPIKeyCreateResponse, error)
 	// UpdateCrossClusterAPIKey updates the cluster API Key with the provided ID.
 	UpdateCrossClusterAPIKey(context.Context, string, CrossClusterAPIKeyUpdateRequest) (CrossClusterAPIKeyUpdateResponse, error)
+	// InvalidateCrossClusterAPIKey invalidates a cluster API Key.
+	InvalidateCrossClusterAPIKey(context.Context, string) error
 	// GetCrossClusterAPIKeys attempts to retrieve Cross Cluster API Keys from the remote cluster.
 	// Provided string is used as the "name" parameter in the HTTP query.
 	// Only active API Keys are included in the response.
 	GetCrossClusterAPIKeys(context.Context, string) (CrossClusterAPIKeyList, error)
+}
+
+type CrossClusterAPIKeyInvalidateRequest struct {
+	Name string `json:"name,omitempty"`
 }
 
 type CrossClusterAPIKeyCreateRequest struct {

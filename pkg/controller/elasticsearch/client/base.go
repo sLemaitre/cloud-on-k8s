@@ -106,6 +106,10 @@ func (c *baseClient) delete(ctx context.Context, pathWithQuery string) error {
 	return c.request(ctx, http.MethodDelete, pathWithQuery, nil, nil, nil)
 }
 
+func (c *baseClient) deleteWithObjects(ctx context.Context, pathWithQuery string, in, out interface{}) error {
+	return c.request(ctx, http.MethodDelete, pathWithQuery, in, out, nil)
+}
+
 // request performs a new http request
 //
 // if requestObj is not nil, it's marshalled as JSON and used as the request body

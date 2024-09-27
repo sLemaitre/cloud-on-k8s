@@ -325,11 +325,16 @@ func (d *defaultDriver) Reconcile(ctx context.Context) *reconciler.Results {
 	keystoreSecurityContext := securitycontext.For(d.Version, true)
 	keystoreParams.SecurityContext = &keystoreSecurityContext
 
-	// setup a keystore with secure settings in an init container, if specified by the user
+	// setup a keystore with secure settings in an init container, if specified by the user.
+	// we are also using the keystore internally for the remote cluster API keys.
+	userSecureSettingsWithRemoteClusterAPIKeys, err := remotecluster.WithRemoteClusterAPIKeys(ctx, &d.ES, d.Client)
+	if err != nil {
+		return results.WithError(err)
+	}
 	keystoreResources, err := keystore.ReconcileResources(
 		ctx,
 		d,
-		&d.ES,
+		userSecureSettingsWithRemoteClusterAPIKeys,
 		esv1.ESNamer,
 		label.NewLabels(k8s.ExtractNamespacedName(&d.ES)),
 		keystoreParams,

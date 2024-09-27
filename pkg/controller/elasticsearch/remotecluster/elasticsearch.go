@@ -151,7 +151,10 @@ func updateSettingsInternal(
 			"updated_remote_clusters", remoteClustersToUpdate,
 			"deleted_remote_clusters", remoteClustersToDelete,
 		)
-
+		apiKeyStore, err := LoadAPIKeyStore(ctx, c, &es)
+		if err != nil {
+			return false, err
+		}
 		for name, remoteClusterChange := range remoteClustersToApply {
 			if remoteClusterChange.apiKey == nil || remoteClusterChange.isDeleted {
 				// Only ensure that we don't have an API Key and that the API Key is not in the ES KeyStore
@@ -172,7 +175,7 @@ func updateSettingsInternal(
 			// 2.1 If not exist create it
 			expectedHash := hash.HashObject(*remoteClusterChange.apiKey)
 			if activeAPIKey == nil {
-				_, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
+				apiKey, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
 					Name: apiKeyName,
 					CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
 						RemoteClusterAPIKey: *remoteClusterChange.apiKey,
@@ -184,10 +187,20 @@ func updateSettingsInternal(
 				if err != nil {
 					return false, err
 				}
+				apiKeyStore.Update(name, apiKey.ID, apiKey.Encoded)
 			}
 
 			// 2.2 If exists ensure that the access field is the expected one using the hash
 			if activeAPIKey != nil {
+				// Ensure that the API key is in the keystore
+				if apiKeyStore.KeyIDFor(name) != activeAPIKey.ID {
+					// We have a problem here, the API Key ID in Elasticsearch does not match the API Key recorded in the Secret.
+					// Desactivate the API Key in ES and requeue
+					if err := esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name); err != nil {
+						return false, err
+					}
+					return false, fmt.Errorf("unknwown remote cluster key id for %s: %s", activeAPIKey.Name, activeAPIKey.ID)
+				}
 				currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
 				if currentHash != expectedHash {
 					// Update the Key
@@ -203,7 +216,9 @@ func updateSettingsInternal(
 				}
 			}
 
-			// 3. Ensure that the API Key is in the Elasticsearch keystore
+			if err := apiKeyStore.Save(ctx, c, &es); err != nil {
+				return false, err
+			}
 
 		}
 
