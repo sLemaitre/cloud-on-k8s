@@ -8,6 +8,9 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
+	errors2 "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"strings"
 	"time"
 
@@ -327,17 +330,18 @@ func (d *defaultDriver) Reconcile(ctx context.Context) *reconciler.Results {
 
 	// setup a keystore with secure settings in an init container, if specified by the user.
 	// we are also using the keystore internally for the remote cluster API keys.
-	userSecureSettingsWithRemoteClusterAPIKeys, err := remotecluster.WithRemoteClusterAPIKeys(ctx, &d.ES, d.Client)
+	remoteClusterAPIKeys, err := apiKeyStoreSecretSource(ctx, &d.ES, d.Client)
 	if err != nil {
 		return results.WithError(err)
 	}
 	keystoreResources, err := keystore.ReconcileResources(
 		ctx,
 		d,
-		userSecureSettingsWithRemoteClusterAPIKeys,
+		&d.ES,
 		esv1.ESNamer,
 		label.NewLabels(k8s.ExtractNamespacedName(&d.ES)),
 		keystoreParams,
+		remoteClusterAPIKeys...,
 	)
 	if err != nil {
 		return results.WithError(err)
@@ -376,6 +380,26 @@ func (d *defaultDriver) Reconcile(ctx context.Context) *reconciler.Results {
 
 	// reconcile StatefulSets and nodes configuration
 	return results.WithResults(d.reconcileNodeSpecs(ctx, esReachable, esClient, d.ReconcileState, *resourcesState, keystoreResources))
+}
+
+func apiKeyStoreSecretSource(ctx context.Context, es *esv1.Elasticsearch, c k8s.Client) ([]commonv1.NamespacedSecretSource, error) {
+	// Check if Secret exists
+	secretName := types.NamespacedName{
+		Name:      esv1.RemoteAPIKeysSecretName(es.Name),
+		Namespace: es.Namespace,
+	}
+	if err := c.Get(ctx, secretName, &corev1.Secret{}); err != nil {
+		if errors2.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return []commonv1.NamespacedSecretSource{
+		{
+			Namespace:  es.Namespace,
+			SecretName: secretName.Name,
+		},
+	}, nil
 }
 
 // newElasticsearchClient creates a new Elasticsearch HTTP client for this cluster using the provided user

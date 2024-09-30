@@ -2,14 +2,12 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-package remotecluster
+package remoteca
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
-	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/keystore"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -172,38 +170,3 @@ func (aks *APIKeyStore) IsEmpty() bool {
 	}
 	return len(aks.aliases) == 0
 }
-
-func WithRemoteClusterAPIKeys(ctx context.Context, es *esv1.Elasticsearch, c k8s.Client) (keystore.HasKeystore, error) {
-	extendedKeystore := &ExtendedKeystore{
-		Elasticsearch:  es,
-		secureSettings: es.SecureSettings(),
-	}
-	// Check if Secret exists
-	secretName := types.NamespacedName{
-		Name:      esv1.RemoteAPIKeysSecretName(es.Name),
-		Namespace: es.Namespace,
-	}
-	if err := c.Get(ctx, secretName, &corev1.Secret{}); err != nil {
-		if errors.IsNotFound(err) {
-			return extendedKeystore, nil
-		}
-		return nil, err
-	}
-	// Add the Secret that holds the API Keys
-	extendedKeystore.secureSettings = append(extendedKeystore.secureSettings, commonv1.SecretSource{SecretName: secretName.Name})
-	return extendedKeystore, nil
-}
-
-type ExtendedKeystore struct {
-	*esv1.Elasticsearch
-	secureSettings []commonv1.SecretSource
-}
-
-func (eks *ExtendedKeystore) SecureSettings() []commonv1.SecretSource {
-	if eks == nil {
-		return nil
-	}
-	return eks.secureSettings
-}
-
-var _ keystore.HasKeystore = &ExtendedKeystore{}

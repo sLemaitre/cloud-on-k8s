@@ -7,6 +7,9 @@ package remoteca
 import (
 	"context"
 	"fmt"
+	commonesclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/esclient"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/hash"
+	esclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/client"
 	"time"
 
 	"go.elastic.co/apm/v2"
@@ -104,7 +107,12 @@ func (r *ReconcileRemoteCa) Reconcile(ctx context.Context, request reconcile.Req
 		return reconcile.Result{}, nil
 	}
 
-	return doReconcile(ctx, r, &es)
+	esClient, err := commonesclient.NewClient(ctx, r.Client, r.Dialer, es)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	return doReconcile(ctx, r, &es, esClient)
 }
 
 // deleteAllRemoteCa deletes all associated remote certificate authorities
@@ -129,6 +137,7 @@ func doReconcile(
 	ctx context.Context,
 	r *ReconcileRemoteCa,
 	localEs *esv1.Elasticsearch,
+	esClient esclient.Client,
 ) (reconcile.Result, error) {
 	log := ulog.FromContext(ctx)
 
@@ -161,7 +170,7 @@ func doReconcile(
 
 	results := &reconciler.Results{}
 	// Create or update expected remote CA
-	for remoteEsKey := range expectedRemoteClusters {
+	for remoteEsKey, remoteClusters := range expectedRemoteClusters {
 		// Get the remote Elasticsearch cluster associated with this remote CA
 		remoteEs := &esv1.Elasticsearch{}
 		if err := r.Client.Get(ctx, remoteEsKey, remoteEs); err != nil {
@@ -184,6 +193,69 @@ func doReconcile(
 		if results.HasError() {
 			return results.Aggregate()
 		}
+		// Create the API Keys if needed
+		apiKeyStore, err := LoadAPIKeyStore(ctx, r.Client, remoteEs)
+		for _, remoteCluster := range remoteClusters {
+			if remoteCluster.APIKey == nil {
+				// TODO: Ensure it does not exist
+			}
+			// 1. Get the API Key
+			apiKeyName := fmt.Sprintf("eck-%s-%s-%s", remoteEs.Namespace, remoteEs.Name, remoteCluster.Name)
+			activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, apiKeyName)
+			if err != nil {
+				return reconcile.Result{}, err
+
+			}
+			activeAPIKey, err := activeAPIKeys.GetActiveKey()
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("error while retrieving active API Key for remote cluster %s: %w", name, err)
+			}
+			// 2.1 If not exist create it
+			expectedHash := hash.HashObject(remoteCluster.APIKey)
+			if activeAPIKey == nil {
+				apiKey, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
+					Name: apiKeyName,
+					CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
+						RemoteClusterAPIKey: *remoteCluster.APIKey,
+						Metadata: map[string]interface{}{
+							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+						},
+					},
+				})
+				if err != nil {
+					return reconcile.Result{}, err
+				}
+				apiKeyStore.Update(name, apiKey.ID, apiKey.Encoded)
+			}
+			// 2.2 If exists ensure that the access field is the expected one using the hash
+			if activeAPIKey != nil {
+				// Ensure that the API key is in the keystore
+				if apiKeyStore.KeyIDFor(name) != activeAPIKey.ID {
+					// We have a problem here, the API Key ID in Elasticsearch does not match the API Key recorded in the Secret.
+					// Desactivate the API Key in ES and requeue
+					if err := esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name); err != nil {
+						return reconcile.Result{}, err
+					}
+					return reconcile.Result{}, fmt.Errorf("unknwown remote cluster key id for %s: %s", activeAPIKey.Name, activeAPIKey.ID)
+				}
+				currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
+				if currentHash != expectedHash {
+					// Update the Key
+					_, err := esClient.UpdateCrossClusterAPIKey(ctx, activeAPIKey.ID, esclient.CrossClusterAPIKeyUpdateRequest{
+						RemoteClusterAPIKey: *remoteCluster.APIKey,
+						Metadata: map[string]interface{}{
+							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+						},
+					})
+					if err != nil {
+						return reconcile.Result{}, err
+					}
+				}
+			}
+		}
+		if err := apiKeyStore.Save(ctx, r.Client, remoteEs); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
 	// Delete existing but not expected remote CA
@@ -203,16 +275,17 @@ func caCertMissingError(cluster types.NamespacedName) string {
 	return fmt.Sprintf("Cannot find CA certificate cluster %s/%s", cluster.Namespace, cluster.Name)
 }
 
-// getExpectedRemoteClusters returns all the remote cluster keys for which a remote ca should created
-// The CA certificates must be copied from the remote cluster to the local one and vice versa
+// getExpectedRemoteClusters returns all the remote cluster keys for which a remote ca and an API Key should be created.
+// The CA certificates must be copied from the remote cluster to the local one and vice versa.
+// The API Key is created in the remote cluster and injected in the keystore of the local cluster.
 func getExpectedRemoteClusters(
 	ctx context.Context,
 	c k8s.Client,
 	associatedEs *esv1.Elasticsearch,
-) (map[types.NamespacedName]struct{}, error) {
+) (map[types.NamespacedName][]esv1.RemoteCluster, error) {
 	span, _ := apm.StartSpan(ctx, "get_expected_remote_ca", tracing.SpanTypeApp)
 	defer span.End()
-	expectedRemoteClusters := make(map[types.NamespacedName]struct{})
+	expectedRemoteClusters := make(map[types.NamespacedName][]esv1.RemoteCluster)
 
 	// Add remote clusters declared in the Spec
 	for _, remoteCluster := range associatedEs.Spec.RemoteClusters {
@@ -220,7 +293,7 @@ func getExpectedRemoteClusters(
 			continue
 		}
 		esRef := remoteCluster.ElasticsearchRef.WithDefaultNamespace(associatedEs.Namespace)
-		expectedRemoteClusters[esRef.NamespacedName()] = struct{}{}
+		expectedRemoteClusters[esRef.NamespacedName()] = nil
 	}
 
 	var list esv1.ElasticsearchList
@@ -238,7 +311,8 @@ func getExpectedRemoteClusters(
 			esRef := remoteCluster.ElasticsearchRef.WithDefaultNamespace(es.Namespace)
 			if esRef.Namespace == associatedEs.Namespace &&
 				esRef.Name == associatedEs.Name {
-				expectedRemoteClusters[k8s.ExtractNamespacedName(&es)] = struct{}{}
+				clientClusterName := k8s.ExtractNamespacedName(&es)
+				expectedRemoteClusters[clientClusterName] = append(expectedRemoteClusters[clientClusterName], remoteCluster)
 			}
 		}
 	}
