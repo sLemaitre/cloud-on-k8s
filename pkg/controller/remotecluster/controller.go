@@ -2,14 +2,11 @@
 // or more contributor license agreements. Licensed under the Elastic License 2.0;
 // you may not use this file except in compliance with the Elastic License 2.0.
 
-package remoteca
+package remotecluster
 
 import (
 	"context"
 	"fmt"
-	commonesclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/esclient"
-	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/hash"
-	esclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/client"
 	"time"
 
 	"go.elastic.co/apm/v2"
@@ -25,12 +22,14 @@ import (
 	esv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/elasticsearch/v1"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/association"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common"
+	commonesclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/esclient"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/license"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/operator"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/reconciler"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/tracing"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/watches"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/certificates/remoteca"
+	esclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/client"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/label"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/k8s"
 	ulog "github.com/elastic/cloud-on-k8s/v2/pkg/utils/log"
@@ -38,7 +37,7 @@ import (
 )
 
 const (
-	name = "remoteca-controller"
+	name = "remotecluster-controller"
 
 	EventReasonClusterCaCertNotFound = "ClusterCaCertNotFound"
 )
@@ -202,82 +201,7 @@ func doReconcile(
 		if !supportRemoteClusterAPIKeys {
 			continue
 		}
-		// Create the API Keys if needed
-		apiKeyStore, err := LoadAPIKeyStore(ctx, r.Client, remoteEs)
-		if err != nil {
-			results.WithError(err)
-			continue
-		}
-		for _, remoteCluster := range remoteClusters {
-			apiKeyName := fmt.Sprintf("eck-%s-%s-%s", remoteEs.Namespace, remoteEs.Name, remoteCluster.Name)
-			if remoteCluster.APIKey == nil {
-				if err := esClient.InvalidateCrossClusterAPIKey(ctx, apiKeyName); err != nil {
-					return reconcile.Result{}, err
-				}
-				// This cluster is not configure with API keys
-			}
-			// 1. Get the API Key
-			activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, apiKeyName)
-			if err != nil {
-				return reconcile.Result{}, err
-
-			}
-			activeAPIKey, err := activeAPIKeys.GetActiveKey()
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("error while retrieving active API Key for remote cluster %s: %w", remoteCluster.Name, err)
-			}
-			// 2.1 If not exist create it
-			expectedHash := hash.HashObject(remoteCluster.APIKey)
-			if activeAPIKey == nil {
-				apiKey, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
-					Name: apiKeyName,
-					CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
-						RemoteClusterAPIKey: *remoteCluster.APIKey,
-						Metadata: map[string]interface{}{
-							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
-							"elasticsearch.k8s.elastic.co/name":        remoteEs.Name,
-							"elasticsearch.k8s.elastic.co/namespace":   remoteEs.Namespace,
-							"elasticsearch.k8s.elastic.co/uid":         remoteEs.UID,
-						},
-					},
-				})
-				if err != nil {
-					return reconcile.Result{}, err
-				}
-				apiKeyStore.Update(remoteCluster.Name, apiKey.ID, apiKey.Encoded)
-			}
-			// 2.2 If exists ensure that the access field is the expected one using the hash
-			if activeAPIKey != nil {
-				// Ensure that the API key is in the keystore
-				if apiKeyStore.KeyIDFor(remoteCluster.Name) != activeAPIKey.ID {
-					// We have a problem here, the API Key ID in Elasticsearch does not match the API Key recorded in the Secret.
-					// Invalidate the API Key in ES and requeue
-					if err := esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name); err != nil {
-						return reconcile.Result{}, err
-					}
-					return reconcile.Result{}, fmt.Errorf("unknwown remote cluster key id for %s: %s", activeAPIKey.Name, activeAPIKey.ID)
-				}
-				currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
-				if currentHash != expectedHash {
-					// Update the Key
-					_, err := esClient.UpdateCrossClusterAPIKey(ctx, activeAPIKey.ID, esclient.CrossClusterAPIKeyUpdateRequest{
-						RemoteClusterAPIKey: *remoteCluster.APIKey,
-						Metadata: map[string]interface{}{
-							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
-							"elasticsearch.k8s.elastic.co/name":        remoteEs.Name,
-							"elasticsearch.k8s.elastic.co/namespace":   remoteEs.Namespace,
-							"elasticsearch.k8s.elastic.co/uid":         remoteEs.UID,
-						},
-					})
-					if err != nil {
-						return reconcile.Result{}, err
-					}
-				}
-			}
-		}
-		if err := apiKeyStore.Save(ctx, r.Client, remoteEs); err != nil {
-			return reconcile.Result{}, err
-		}
+		results.WithError(reconcileAPIKeys(ctx, r.Client, remoteEs, remoteClusters, esClient))
 	}
 
 	// Delete existing but not expected remote CA
