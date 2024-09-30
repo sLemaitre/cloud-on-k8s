@@ -58,7 +58,7 @@ func TestLoadAPIKeyStore(t *testing.T) {
 							Namespace: testNamespace,
 							Name:      "myes-es-remote-api-keys",
 							Annotations: map[string]string{
-								"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{ "rc2" : "SecretKeyID2", "rc1" : "SecretKeyID1"}`,
+								"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{ "rc2" : { "namespace" : "ns2", "name" : "es2", "id": "SecretKeyID2" }, "rc1" : {  "namespace" : "ns1", "name" : "es1", "id": "SecretKeyID1" } }`,
 							},
 						},
 						Data: map[string][]byte{
@@ -70,9 +70,9 @@ func TestLoadAPIKeyStore(t *testing.T) {
 				owner: es,
 			},
 			want: &APIKeyStore{
-				aliases: map[string]string{
-					"rc1": "SecretKeyID1",
-					"rc2": "SecretKeyID2",
+				aliases: map[string]AliasValue{
+					"rc1": {ID: "SecretKeyID1", Namespace: "ns1", Name: "es1"},
+					"rc2": {ID: "SecretKeyID2", Namespace: "ns2", Name: "es2"},
 				},
 				keys: map[string]string{
 					"rc1": "SecretKeyValue1",
@@ -118,8 +118,8 @@ func TestAPIKeyStore_Save(t *testing.T) {
 		{
 			name: "Create a new store",
 			receiver: (&APIKeyStore{}).
-				Update("rc1", "keyid1", "encodedValue1").
-				Update("rc2", "keyid2", "encodedValue2"),
+				Update("ns1", "es1", "rc1", "keyid1", "encodedValue1").
+				Update("ns1", "es1", "rc2", "keyid2", "encodedValue2"),
 			args: args{c: k8s.NewFakeClient()},
 			want: &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
@@ -127,7 +127,7 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "1",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc1":"keyid1","rc2":"keyid2"}`,
+						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc1":{"namespace":"es1","name":"ns1","id":"keyid1"},"rc2":{"namespace":"es1","name":"ns1","id":"keyid2"}}`,
 					},
 					Labels: map[string]string{
 						"common.k8s.elastic.co/type":                "elasticsearch",
@@ -154,8 +154,8 @@ func TestAPIKeyStore_Save(t *testing.T) {
 		{
 			name: "Delete the store",
 			receiver: (&APIKeyStore{}).
-				Update("rc1", "keyid1", "encodedValue1").
-				Update("rc2", "keyid2", "encodedValue2").
+				Update("ns1", "es1", "rc1", "keyid1", "encodedValue1").
+				Update("ns2", "es2", "rc2", "keyid2", "encodedValue2").
 				Delete("rc1").Delete("rc2"),
 			args: args{c: k8s.NewFakeClient(&corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
@@ -188,18 +188,20 @@ func TestAPIKeyStore_Save(t *testing.T) {
 			})},
 		},
 		{
-			name: "Add a new key, remove another",
+			name: "Add new keys, remove another",
 			receiver: (&APIKeyStore{}).
-				Update("rc1", "keyid1", "encodedValue1").
-				Update("rc2", "keyid2", "encodedValue2").
-				Delete("rc1").Update("rc3", "keyid3", "encodedValue3"),
+				Update("ns1", "es1", "rc1", "keyid1", "encodedValue1").
+				Update("ns2", "es2", "rc2", "keyid2", "encodedValue2").
+				Delete("rc1").
+				Update("ns3", "es3", "rc3_1", "keyid3_1", "encodedValue31").
+				Update("ns3", "es3", "rc3_2", "keyid3_2", "encodedValue32"),
 			args: args{c: k8s.NewFakeClient(&corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace:       testNamespace,
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "1",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc1":"keyid1","rc2":"keyid2"}`,
+						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc2":{"namespace":"es2","name":"ns2","id":"keyid2"},"rc1":{"namespace":"es1","name":"ns1","id":"keyid1"}}`,
 					},
 					Labels: map[string]string{
 						"common.k8s.elastic.co/type":                "elasticsearch",
@@ -229,7 +231,7 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "2",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc2":"keyid2","rc3":"keyid3"}`,
+						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc2":{"namespace":"es2","name":"ns2","id":"keyid2"},"rc3_1":{"namespace":"es3","name":"ns3","id":"keyid3_1"},"rc3_2":{"namespace":"es3","name":"ns3","id":"keyid3_2"}}`,
 					},
 					Labels: map[string]string{
 						"common.k8s.elastic.co/type":                "elasticsearch",
@@ -248,8 +250,9 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					},
 				},
 				Data: map[string][]byte{
-					"cluster.remote.rc2.credentials": []byte("encodedValue2"),
-					"cluster.remote.rc3.credentials": []byte("encodedValue3"),
+					"cluster.remote.rc2.credentials":   []byte("encodedValue2"),
+					"cluster.remote.rc3_1.credentials": []byte("encodedValue31"),
+					"cluster.remote.rc3_2.credentials": []byte("encodedValue32"),
 				},
 			},
 		},

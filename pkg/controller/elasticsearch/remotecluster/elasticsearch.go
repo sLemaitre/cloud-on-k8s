@@ -36,12 +36,6 @@ func UpdateSettings(
 	licenseChecker license.Checker,
 	es esv1.Elasticsearch,
 ) (bool, error) {
-
-	// Always attempt to garbage collect unexpected API Keys
-	if err := garbageCollectAPIKeys(ctx, c, &es); err != nil {
-		return false, err
-	}
-
 	remoteClustersInSpec := getRemoteClustersInSpec(es)
 	isRemoteClustersSpec := len(remoteClustersInSpec) > 0
 	_, isRemoteClustersAnnotation := es.Annotations[ManagedRemoteClustersAnnotationName]

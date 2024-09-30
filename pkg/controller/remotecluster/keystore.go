@@ -34,16 +34,38 @@ var (
 
 type APIKeyStore struct {
 	// aliases maps cluster aliased with the expected key ID
-	aliases map[string]string
+	aliases map[string]AliasValue
 	// keys maps the ID of an API Key (not its name), to the encoded cross-cluster API key.
 	keys map[string]string
+}
+
+type AliasValue struct {
+	// Namespace of the remote cluster.
+	Namespace string `json:"namespace"`
+	// Name of the remote cluster.
+	Name string `json:"name"`
+	// ID is the key ID.
+	ID string `json:"id"`
 }
 
 func (aks *APIKeyStore) KeyIDFor(alias string) string {
 	if aks == nil {
 		return ""
 	}
-	return aks.aliases[alias]
+	return aks.aliases[alias].ID
+}
+
+func (aks *APIKeyStore) AliasesFor(namespace, name string) []string {
+	if aks == nil {
+		return nil
+	}
+	aliases := make([]string, len(aks.aliases))
+	for alias, value := range aks.aliases {
+		if value.Namespace == namespace && value.Name == name {
+			aliases = append(aliases, alias)
+		}
+	}
+	return aliases
 }
 
 func LoadAPIKeyStore(ctx context.Context, c k8s.Client, owner *esv1.Elasticsearch) (*APIKeyStore, error) {
@@ -65,7 +87,7 @@ func LoadAPIKeyStore(ctx context.Context, c k8s.Client, owner *esv1.Elasticsearc
 	}
 
 	// Read the key aliased
-	aliases := make(map[string]string)
+	aliases := make(map[string]AliasValue)
 	if aliasesAnnotation, ok := keyStoreSecret.Annotations[aliasesAnnotationName]; ok {
 		if err := json.Unmarshal([]byte(aliasesAnnotation), &aliases); err != nil {
 			return nil, err
@@ -92,11 +114,15 @@ func LoadAPIKeyStore(ctx context.Context, c k8s.Client, owner *esv1.Elasticsearc
 	}, nil
 }
 
-func (aks *APIKeyStore) Update(alias, keyID, encodedKeyValue string) *APIKeyStore {
+func (aks *APIKeyStore) Update(remoteClusterName, remoteClusterNamespace, alias, keyID, encodedKeyValue string) *APIKeyStore {
 	if aks.aliases == nil {
-		aks.aliases = make(map[string]string)
+		aks.aliases = make(map[string]AliasValue)
 	}
-	aks.aliases[alias] = keyID
+	aks.aliases[alias] = AliasValue{
+		Namespace: remoteClusterNamespace,
+		Name:      remoteClusterName,
+		ID:        keyID,
+	}
 	if aks.keys == nil {
 		aks.keys = make(map[string]string)
 	}

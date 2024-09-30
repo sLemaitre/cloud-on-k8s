@@ -19,6 +19,7 @@ import (
 func reconcileAPIKeys(
 	ctx context.Context,
 	c k8s.Client,
+	localES *esv1.Elasticsearch,
 	remoteEs *esv1.Elasticsearch, // the remote cluster which is going to act as the client
 	remoteClusters []esv1.RemoteCluster, // the API keys
 	esClient esclient.Client,
@@ -65,7 +66,7 @@ func reconcileAPIKeys(
 			if err != nil {
 				return err
 			}
-			apiKeyStore.Update(remoteCluster.Name, apiKey.ID, apiKey.Encoded)
+			apiKeyStore.Update(localES.Name, localES.Namespace, remoteCluster.Name, apiKey.ID, apiKey.Encoded)
 		}
 		// 2.2 If exists ensure that the access field is the expected one using the hash
 		if activeAPIKey != nil {

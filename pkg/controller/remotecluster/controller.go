@@ -201,7 +201,7 @@ func doReconcile(
 		if !supportRemoteClusterAPIKeys {
 			continue
 		}
-		results.WithError(reconcileAPIKeys(ctx, r.Client, remoteEs, remoteClusters, esClient))
+		results.WithError(reconcileAPIKeys(ctx, r.Client, localEs, remoteEs, remoteClusters, esClient))
 	}
 
 	// Delete existing but not expected remote CA
