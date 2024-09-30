@@ -193,14 +193,30 @@ func doReconcile(
 		if results.HasError() {
 			return results.Aggregate()
 		}
+		supportRemoteClusterAPIKeys, err := remoteEs.SupportRemoteClusterAPIKeys()
+		if err != nil {
+			results.WithError(err)
+			continue
+		}
+
+		if !supportRemoteClusterAPIKeys {
+			continue
+		}
 		// Create the API Keys if needed
 		apiKeyStore, err := LoadAPIKeyStore(ctx, r.Client, remoteEs)
+		if err != nil {
+			results.WithError(err)
+			continue
+		}
 		for _, remoteCluster := range remoteClusters {
+			apiKeyName := fmt.Sprintf("eck-%s-%s-%s", remoteEs.Namespace, remoteEs.Name, remoteCluster.Name)
 			if remoteCluster.APIKey == nil {
-				// TODO: Ensure it does not exist
+				if err := esClient.InvalidateCrossClusterAPIKey(ctx, apiKeyName); err != nil {
+					return reconcile.Result{}, err
+				}
+				// This cluster is not configure with API keys
 			}
 			// 1. Get the API Key
-			apiKeyName := fmt.Sprintf("eck-%s-%s-%s", remoteEs.Namespace, remoteEs.Name, remoteCluster.Name)
 			activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, apiKeyName)
 			if err != nil {
 				return reconcile.Result{}, err
@@ -208,7 +224,7 @@ func doReconcile(
 			}
 			activeAPIKey, err := activeAPIKeys.GetActiveKey()
 			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("error while retrieving active API Key for remote cluster %s: %w", name, err)
+				return reconcile.Result{}, fmt.Errorf("error while retrieving active API Key for remote cluster %s: %w", remoteCluster.Name, err)
 			}
 			// 2.1 If not exist create it
 			expectedHash := hash.HashObject(remoteCluster.APIKey)
@@ -219,6 +235,9 @@ func doReconcile(
 						RemoteClusterAPIKey: *remoteCluster.APIKey,
 						Metadata: map[string]interface{}{
 							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+							"elasticsearch.k8s.elastic.co/name":        remoteEs.Name,
+							"elasticsearch.k8s.elastic.co/namespace":   remoteEs.Namespace,
+							"elasticsearch.k8s.elastic.co/uid":         remoteEs.UID,
 						},
 					},
 				})
@@ -245,6 +264,9 @@ func doReconcile(
 						RemoteClusterAPIKey: *remoteCluster.APIKey,
 						Metadata: map[string]interface{}{
 							"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+							"elasticsearch.k8s.elastic.co/name":        remoteEs.Name,
+							"elasticsearch.k8s.elastic.co/namespace":   remoteEs.Namespace,
+							"elasticsearch.k8s.elastic.co/uid":         remoteEs.UID,
 						},
 					})
 					if err != nil {

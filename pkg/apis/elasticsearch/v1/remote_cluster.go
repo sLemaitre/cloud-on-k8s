@@ -4,6 +4,24 @@
 
 package v1
 
+import "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/version"
+
+var (
+	RemoteClusterAPIKeysMinVersion = version.MinFor(8, 15, 0)
+)
+
+// SupportRemoteClusterAPIKeys returns true if this cluster supports connecting to a remote cluster using API keys.
+func (es *Elasticsearch) SupportRemoteClusterAPIKeys() (bool, error) {
+	if es == nil {
+		return false, nil
+	}
+	esVersion, err := version.Parse(es.Status.Version)
+	if err != nil {
+		return false, err
+	}
+	return esVersion.GTE(RemoteClusterAPIKeysMinVersion), nil
+}
+
 // HasRemoteClusterAPIKey returns true if this cluster is connecting to a remote cluster using API keys.
 func (es *Elasticsearch) HasRemoteClusterAPIKey() bool {
 	if es == nil {

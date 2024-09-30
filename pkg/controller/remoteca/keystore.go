@@ -104,6 +104,19 @@ func (aks *APIKeyStore) Update(alias, keyID, encodedKeyValue string) *APIKeyStor
 	return aks
 }
 
+func (aks *APIKeyStore) Aliases() []string {
+	if aks == nil {
+		return nil
+	}
+	aliases := make([]string, len(aks.aliases))
+	i := 0
+	for alias := range aks.aliases {
+		aliases[i] = alias
+		i++
+	}
+	return aliases
+}
+
 func (aks *APIKeyStore) Delete(alias string) *APIKeyStore {
 	delete(aks.aliases, alias)
 	delete(aks.keys, alias)
