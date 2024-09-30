@@ -4,6 +4,19 @@
 
 package v1
 
+// HasRemoteClusterAPIKey returns true if this cluster is connecting to a remote cluster using API keys.
+func (es *Elasticsearch) HasRemoteClusterAPIKey() bool {
+	if es == nil {
+		return false
+	}
+	for _, remoteCLuster := range es.Spec.RemoteClusters {
+		if remoteCLuster.APIKey != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // RemoteClusterAPIKey defines a remote cluster API Key.
 type RemoteClusterAPIKey struct {
 	// Expiration date. If set the key is automatically renewed by ECK.

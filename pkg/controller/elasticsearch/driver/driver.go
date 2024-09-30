@@ -152,6 +152,26 @@ func (d *defaultDriver) Reconcile(ctx context.Context) *reconciler.Results {
 		return results.WithError(err)
 	}
 
+	if d.ES.Spec.RemoteClusterServer.Enabled {
+		if _, err := common.ReconcileService(ctx, d.Client, services.NewRemoteClusterService(d.ES), &d.ES); err != nil {
+			results.WithError(err)
+		}
+	} else {
+		// Ensure service is deleted deleted.
+		remoteClusterService := &corev1.Service{}
+		remoteClusterServiceName := types.NamespacedName{
+			Name:      services.RemoteClusterServiceName(d.ES.Name),
+			Namespace: d.ES.Namespace,
+		}
+		if err := d.Client.Get(ctx, remoteClusterServiceName, remoteClusterService); err != nil {
+			if !errors2.IsNotFound(err) {
+				results.WithError(err)
+			}
+		} else {
+			results.WithError(d.Client.Delete(ctx, remoteClusterService))
+		}
+	}
+
 	resourcesState, err := reconcile.NewResourcesStateFromAPI(d.Client, d.ES)
 	if err != nil {
 		return results.WithError(err)

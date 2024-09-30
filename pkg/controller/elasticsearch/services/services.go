@@ -75,9 +75,20 @@ func InternalServiceName(esName string) string {
 	return esv1.InternalHTTPService(esName)
 }
 
+// RemoteClusterServiceName returns the name for the internal service
+// associated to this cluster, managed by the operator exclusively.
+func RemoteClusterServiceName(esName string) string {
+	return esv1.RemoteClusterService(esName)
+}
+
 // ExternalTransportServiceHost returns the hostname and the port used to reach Elasticsearch's transport endpoint.
 func ExternalTransportServiceHost(es types.NamespacedName) string {
 	return stringsutil.Concat(TransportServiceName(es.Name), ".", es.Namespace, globalServiceSuffix, ":", strconv.Itoa(network.TransportPort))
+}
+
+// RemoteClusterServerServiceHost returns the hostname and the port used to reach Elasticsearch's remote cluster server endpoint.
+func RemoteClusterServerServiceHost(es types.NamespacedName) string {
+	return stringsutil.Concat(RemoteClusterServiceName(es.Name), ".", es.Namespace, globalServiceSuffix, ":", strconv.Itoa(network.RemoteClusterPort))
 }
 
 // ExternalServiceURL returns the URL used to reach Elasticsearch's external endpoint.
@@ -133,6 +144,29 @@ func NewInternalService(es esv1.Elasticsearch) *corev1.Service {
 					Name:     es.Spec.HTTP.Protocol(),
 					Protocol: corev1.ProtocolTCP,
 					Port:     network.HTTPPort,
+				},
+			},
+			Selector:                 label.NewLabels(k8s.ExtractNamespacedName(&es)),
+			PublishNotReadyAddresses: false,
+		},
+	}
+}
+
+// NewRemoteClusterService returns the service associated to the remote cluster service for the given cluster.
+func NewRemoteClusterService(es esv1.Elasticsearch) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      RemoteClusterServiceName(es.Name),
+			Namespace: es.Namespace,
+			Labels:    label.NewLabels(k8s.ExtractNamespacedName(&es)),
+		},
+		Spec: corev1.ServiceSpec{
+			Type: corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{
+				{
+					Name:     "rcs",
+					Protocol: corev1.ProtocolTCP,
+					Port:     network.RemoteClusterPort,
 				},
 			},
 			Selector:                 label.NewLabels(k8s.ExtractNamespacedName(&es)),

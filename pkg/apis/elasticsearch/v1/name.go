@@ -23,6 +23,7 @@ const (
 	policyEsConfigSecretSuffix                   = "policy-config" //nolint:gosec
 	httpServiceSuffix                            = "http"
 	internalHTTPServiceSuffix                    = "internal-http"
+	remoteClusterServiceSuffix                   = "remote-cluster"
 	transportServiceSuffix                       = "transport"
 	elasticUserSecretSuffix                      = "elastic-user"
 	internalUsersSecretSuffix                    = "internal-users"
@@ -138,6 +139,10 @@ func TransportService(esName string) string {
 
 func InternalHTTPService(esName string) string {
 	return ESNamer.Suffix(esName, internalHTTPServiceSuffix)
+}
+
+func RemoteClusterService(esName string) string {
+	return ESNamer.Suffix(esName, remoteClusterServiceSuffix)
 }
 
 func HTTPService(esName string) string {

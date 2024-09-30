@@ -19,7 +19,7 @@ spec:
         access:
           search:
             names:
-              - bar
+              - kibana_sample_data_ecommerce
               - bla
           replication:
             names:
@@ -29,6 +29,7 @@ spec:
     - name: default
       config:
         node.store.allow_mmap: false
+        ##remote_cluster_server.enabled: true
       count: 3
 ---
 apiVersion: kibana.k8s.elastic.co/v1
@@ -37,6 +38,11 @@ metadata:
   name: kibana
   namespace: ns1
 spec:
+  http:
+    service:
+      spec:
+        # expose this cluster Service with a LoadBalancer
+        type: LoadBalancer
   version: 8.15.0
   count: 1
   elasticsearchRef:
@@ -54,10 +60,13 @@ metadata:
   namespace: ns2
 spec:
   version: 8.15.0
+  remoteClusterServer:
+    enabled: true
   nodeSets:
     - name: default
       config:
         node.store.allow_mmap: false
+        remote_cluster_server.enabled: true
       count: 3
 ---
 apiVersion: kibana.k8s.elastic.co/v1
@@ -66,6 +75,11 @@ metadata:
   name: kibana
   namespace: ns2
 spec:
+  http:
+    service:
+      spec:
+        # expose this cluster Service with a LoadBalancer
+        type: LoadBalancer
   version: 8.15.0
   count: 1
   elasticsearchRef:

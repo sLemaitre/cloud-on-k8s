@@ -82,6 +82,10 @@ type ElasticsearchSpec struct {
 	// Image is the Elasticsearch Docker image to deploy.
 	Image string `json:"image,omitempty"`
 
+	// RemoteClusterServer specifies is the remote cluster server must be enabled.
+	// +kubebuilder:validation:Optional
+	RemoteClusterServer RemoteClusterServer `json:"remoteClusterServer,omitempty"`
+
 	// HTTP holds HTTP layer settings for Elasticsearch.
 	// +kubebuilder:validation:Optional
 	HTTP commonv1.HTTPConfig `json:"http,omitempty"`
@@ -137,6 +141,10 @@ type ElasticsearchSpec struct {
 
 	// RevisionHistoryLimit is the number of revisions to retain to allow rollback in the underlying StatefulSets.
 	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
+}
+
+type RemoteClusterServer struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // VolumeClaimDeletePolicy describes the delete policy for handling PersistentVolumeClaims that hold Elasticsearch data.

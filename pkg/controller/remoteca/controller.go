@@ -225,14 +225,14 @@ func doReconcile(
 				if err != nil {
 					return reconcile.Result{}, err
 				}
-				apiKeyStore.Update(name, apiKey.ID, apiKey.Encoded)
+				apiKeyStore.Update(remoteCluster.Name, apiKey.ID, apiKey.Encoded)
 			}
 			// 2.2 If exists ensure that the access field is the expected one using the hash
 			if activeAPIKey != nil {
 				// Ensure that the API key is in the keystore
-				if apiKeyStore.KeyIDFor(name) != activeAPIKey.ID {
+				if apiKeyStore.KeyIDFor(remoteCluster.Name) != activeAPIKey.ID {
 					// We have a problem here, the API Key ID in Elasticsearch does not match the API Key recorded in the Secret.
-					// Desactivate the API Key in ES and requeue
+					// Invalidate the API Key in ES and requeue
 					if err := esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name); err != nil {
 						return reconcile.Result{}, err
 					}

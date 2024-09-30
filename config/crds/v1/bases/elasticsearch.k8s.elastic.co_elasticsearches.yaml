@@ -9263,6 +9263,13 @@ spec:
                         type: string
                     type: object
                 type: object
+              remoteClusterServer:
+                description: RemoteClusterServer specifies is the remote cluster server
+                  must be enabled.
+                properties:
+                  enabled:
+                    type: boolean
+                type: object
               remoteClusters:
                 description: RemoteClusters enables you to establish uni-directional
                   connections to a remote Elasticsearch cluster.
