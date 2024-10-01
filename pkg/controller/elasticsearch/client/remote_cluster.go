@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	esv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/elasticsearch/v1"
 )
@@ -63,6 +64,31 @@ func (cl *CrossClusterAPIKeyList) Len() int {
 		return 0
 	}
 	return len(cl.APIKeys)
+}
+
+// GetActiveKeyWithName returns the first active key that matches the provided name or pattern.
+func (cl *CrossClusterAPIKeyList) GetActiveKeyWithName(name string) *CrossClusterAPIKey {
+	if cl == nil || cl.Len() == 0 {
+		return nil
+	}
+	for _, key := range cl.APIKeys {
+		if key.Name == name {
+			return &key
+		}
+	}
+	return nil
+}
+
+// KeyNames extracts the key names from a list of keys.
+func (cl *CrossClusterAPIKeyList) KeyNames() sets.Set[string] {
+	if cl == nil || cl.Len() == 0 {
+		return nil
+	}
+	result := sets.New[string]()
+	for _, key := range cl.APIKeys {
+		result.Insert(key.Name)
+	}
+	return result
 }
 
 func (cl *CrossClusterAPIKeyList) GetActiveKey() (*CrossClusterAPIKey, error) {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/hash"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/k8s"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	esv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/elasticsearch/v1"
 	esclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/client"
@@ -19,18 +20,26 @@ import (
 func reconcileAPIKeys(
 	ctx context.Context,
 	c k8s.Client,
-	localES *esv1.Elasticsearch,
-	remoteEs *esv1.Elasticsearch, // the remote cluster which is going to act as the client
-	remoteClusters []esv1.RemoteCluster, // the API keys
-	esClient esclient.Client,
+	reconciledES *esv1.Elasticsearch, // the Elasticsearch cluster being reconciled, where the API keys must be created/invalidated.
+	clientES *esv1.Elasticsearch, // the remote Elasticsearch cluster which is going to act as the client, where the API keys are going to be store in the keystore Secret.
+	remoteClusters []esv1.RemoteCluster, // the expected API keys for that client cluster
+	esClient esclient.Client, // ES client for the remote cluster which is going to act as the client
 ) error {
-	// Create the API Keys if needed
-	apiKeyStore, err := LoadAPIKeyStore(ctx, c, remoteEs)
+	// Get all the API Keys, for that specific client, on the reconciled cluster.
+	activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, fmt.Sprintf("eck-%s-%s-*", clientES.Namespace, clientES.Name))
 	if err != nil {
 		return err
 	}
+	// Create the API Keys if needed
+	apiKeyStore, err := LoadAPIKeyStore(ctx, c, clientES)
+	if err != nil {
+		return err
+	}
+	// Read all the API keys, stored in Elasticsearch, on that cluster.
+	expectedKeys := sets.New[string]()
 	for _, remoteCluster := range remoteClusters {
-		apiKeyName := fmt.Sprintf("eck-%s-%s-%s", remoteEs.Namespace, remoteEs.Name, remoteCluster.Name)
+		apiKeyName := fmt.Sprintf("eck-%s-%s-%s", clientES.Namespace, clientES.Name, remoteCluster.Name)
+		expectedKeys.Insert(apiKeyName)
 		if remoteCluster.APIKey == nil {
 			// This cluster is not configure with API keys, attempt to invalidate any key and continue.
 			if err := esClient.InvalidateCrossClusterAPIKey(ctx, apiKeyName); err != nil {
@@ -39,15 +48,7 @@ func reconcileAPIKeys(
 			continue
 		}
 		// 1. Get the API Key
-		activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, apiKeyName)
-		if err != nil {
-			return err
-
-		}
-		activeAPIKey, err := activeAPIKeys.GetActiveKey()
-		if err != nil {
-			return fmt.Errorf("error while retrieving active API Key for remote cluster %s: %w", remoteCluster.Name, err)
-		}
+		activeAPIKey := activeAPIKeys.GetActiveKeyWithName(apiKeyName)
 		// 2.1 If not exist create it
 		expectedHash := hash.HashObject(remoteCluster.APIKey)
 		if activeAPIKey == nil {
@@ -57,16 +58,17 @@ func reconcileAPIKeys(
 					RemoteClusterAPIKey: *remoteCluster.APIKey,
 					Metadata: map[string]interface{}{
 						"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
-						"elasticsearch.k8s.elastic.co/name":        remoteEs.Name,
-						"elasticsearch.k8s.elastic.co/namespace":   remoteEs.Namespace,
-						"elasticsearch.k8s.elastic.co/uid":         remoteEs.UID,
+						"elasticsearch.k8s.elastic.co/name":        clientES.Name,
+						"elasticsearch.k8s.elastic.co/namespace":   clientES.Namespace,
+						"elasticsearch.k8s.elastic.co/uid":         clientES.UID,
+						"elasticsearch.k8s.elastic.co/managed-by":  "eck",
 					},
 				},
 			})
 			if err != nil {
 				return err
 			}
-			apiKeyStore.Update(localES.Name, localES.Namespace, remoteCluster.Name, apiKey.ID, apiKey.Encoded)
+			apiKeyStore.Update(reconciledES.Name, reconciledES.Namespace, remoteCluster.Name, apiKey.ID, apiKey.Encoded)
 		}
 		// 2.2 If exists ensure that the access field is the expected one using the hash
 		if activeAPIKey != nil {
@@ -86,9 +88,10 @@ func reconcileAPIKeys(
 					RemoteClusterAPIKey: *remoteCluster.APIKey,
 					Metadata: map[string]interface{}{
 						"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
-						"elasticsearch.k8s.elastic.co/name":        remoteEs.Name,
-						"elasticsearch.k8s.elastic.co/namespace":   remoteEs.Namespace,
-						"elasticsearch.k8s.elastic.co/uid":         remoteEs.UID,
+						"elasticsearch.k8s.elastic.co/name":        clientES.Name,
+						"elasticsearch.k8s.elastic.co/namespace":   clientES.Namespace,
+						"elasticsearch.k8s.elastic.co/uid":         clientES.UID,
+						"elasticsearch.k8s.elastic.co/managed-by":  "eck",
 					},
 				})
 				if err != nil {
@@ -99,9 +102,17 @@ func reconcileAPIKeys(
 	}
 
 	// Delete all the keys related to that local cluster which are not expected.
-	currentAliases := apiKeyStore.AliasesFor(localES.Namespace, localES.Name)
+	for keyName := range activeAPIKeys.KeyNames() {
+		if !expectedKeys.Has(keyName) {
+			// Unexpected key let's invalidate it.
+			if err := esClient.InvalidateCrossClusterAPIKey(ctx, keyName); err != nil {
+				return err
+			}
+		}
+	}
 
-	if err := apiKeyStore.Save(ctx, c, remoteEs); err != nil {
+	// Save the generated keys in the keystore.
+	if err := apiKeyStore.Save(ctx, c, clientES); err != nil {
 		return err
 	}
 	return nil

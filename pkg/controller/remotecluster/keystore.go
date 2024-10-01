@@ -59,7 +59,7 @@ func (aks *APIKeyStore) AliasesFor(namespace, name string) []string {
 	if aks == nil {
 		return nil
 	}
-	aliases := make([]string, len(aks.aliases))
+	aliases := make([]string, 0, len(aks.aliases))
 	for alias, value := range aks.aliases {
 		if value.Namespace == namespace && value.Name == name {
 			aliases = append(aliases, alias)
