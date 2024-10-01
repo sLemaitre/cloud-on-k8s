@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,7 +26,9 @@ import (
 )
 
 const (
-	aliasesAnnotationName = "elasticsearch.k8s.elastic.co/remote-clusters-keys"
+	aliasesAnnotationName = "elasticsearch.k8s.elastic.co/remote-cluster-api-keys"
+
+	remoteClusterAPIKeysType = "remote-cluster-api-keys"
 )
 
 var (
@@ -186,6 +189,8 @@ func (aks *APIKeyStore) Save(ctx context.Context, c k8s.Client, owner *esv1.Elas
 	for k, v := range aks.keys {
 		data[fmt.Sprintf(credentialsKeyFormat, k)] = []byte(v)
 	}
+	expectedLabels := labels.AddCredentialsLabel(label.NewLabels(k8s.ExtractNamespacedName(owner)))
+	expectedLabels[commonv1.TypeLabelName] = remoteClusterAPIKeysType
 	expected := corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName.Name,
@@ -193,7 +198,7 @@ func (aks *APIKeyStore) Save(ctx context.Context, c k8s.Client, owner *esv1.Elas
 			Annotations: map[string]string{
 				aliasesAnnotationName: string(aliases),
 			},
-			Labels: labels.AddCredentialsLabel(label.NewLabels(k8s.ExtractNamespacedName(owner))),
+			Labels: expectedLabels,
 		},
 		Data: data,
 	}

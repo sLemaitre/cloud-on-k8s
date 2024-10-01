@@ -30,12 +30,14 @@ func reconcileAPIKeys(
 	if err != nil {
 		return err
 	}
-	// Create the API Keys if needed
+
+	// We may have to inject new API keystore in the client keystore.
 	apiKeyStore, err := LoadAPIKeyStore(ctx, c, clientES)
 	if err != nil {
 		return err
 	}
-	// Read all the API keys, stored in Elasticsearch, on that cluster.
+
+	// Maintain a list of the expected API keys to detect the ones which are no longer expected in the reconciled cluster.
 	expectedKeys := sets.New[string]()
 	for _, remoteCluster := range remoteClusters {
 		apiKeyName := fmt.Sprintf("eck-%s-%s-%s", clientES.Namespace, clientES.Name, remoteCluster.Name)
@@ -47,9 +49,9 @@ func reconcileAPIKeys(
 			}
 			continue
 		}
-		// 1. Get the API Key
+		// 1. Attempt to get the API Key
 		activeAPIKey := activeAPIKeys.GetActiveKeyWithName(apiKeyName)
-		// 2.1 If not exist create it
+		// 2.1 If not exist create it in the reconciled cluster.
 		expectedHash := hash.HashObject(remoteCluster.APIKey)
 		if activeAPIKey == nil {
 			apiKey, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{

@@ -7,6 +7,7 @@ package remotecluster
 import (
 	"context"
 	"fmt"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/label"
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -32,7 +33,9 @@ func addWatches(mgr manager.Manager, c controller.Controller, r *ReconcileRemote
 		return err
 	}
 
-	// Watch Secrets that contain remote certificate authorities managed by this controller
+	// Watch Secrets that contain:
+	//  * Remote certificate authorities managed by this controller.
+	//  * API keys
 	if err := c.Watch(
 		source.Kind(mgr.GetCache(), &v1.Secret{},
 			handler.TypedEnqueueRequestsFromMapFunc[*v1.Secret, reconcile.Request](newRequestsFromMatchedLabels()),
@@ -58,21 +61,36 @@ func addWatches(mgr manager.Manager, c controller.Controller, r *ReconcileRemote
 // newRequestsFromMatchedLabels creates a watch handler function that creates reconcile requests based on the
 // labels set on a Secret which contains the remote CA.
 func newRequestsFromMatchedLabels() handler.TypedMapFunc[*v1.Secret, reconcile.Request] {
-	return handler.TypedMapFunc[*v1.Secret, reconcile.Request](func(ctx context.Context, obj *v1.Secret) []reconcile.Request {
+	return func(ctx context.Context, obj *v1.Secret) []reconcile.Request {
 		labels := obj.GetLabels()
-		if !maps.ContainsKeys(labels, RemoteClusterNameLabelName, RemoteClusterNamespaceLabelName, commonv1.TypeLabelName) {
-			return nil
+		if maps.ContainsKeys(labels, RemoteClusterNameLabelName, RemoteClusterNamespaceLabelName, commonv1.TypeLabelName) {
+			// Remote cluster CA
+			if labels[commonv1.TypeLabelName] != remoteca.TypeLabelValue {
+				return nil
+			}
+			return []reconcile.Request{
+				{NamespacedName: types.NamespacedName{
+					Namespace: labels[RemoteClusterNamespaceLabelName],
+					Name:      labels[RemoteClusterNameLabelName]},
+				},
+			}
 		}
-		if labels[commonv1.TypeLabelName] != remoteca.TypeLabelValue {
-			return nil
+
+		if maps.ContainsKeys(labels, label.ClusterNameLabelName, commonv1.TypeLabelName) {
+			if labels[commonv1.TypeLabelName] != remoteClusterAPIKeysType {
+				return nil
+			}
+			// Remote cluster API keys Secret event.
+			return []reconcile.Request{
+				{NamespacedName: types.NamespacedName{
+					Namespace: obj.Namespace,
+					Name:      labels[label.ClusterNameLabelName]},
+				},
+			}
 		}
-		return []reconcile.Request{
-			{NamespacedName: types.NamespacedName{
-				Namespace: labels[RemoteClusterNamespaceLabelName],
-				Name:      labels[RemoteClusterNameLabelName]},
-			},
-		}
-	})
+
+		return nil
+	}
 }
 
 func watchName(local types.NamespacedName, remote types.NamespacedName) string {
