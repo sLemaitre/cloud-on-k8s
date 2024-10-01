@@ -21,10 +21,15 @@ spec:
             names:
               - kibana_sample_data_ecommerce
               - bla
-          replication:
-            names:
-              - foo
-    - name: second-rc
+#    - name: rc-to-cluster3
+#      elasticsearchRef:
+#        name: cluster3
+#        namespace: ns3
+#      apiKey:
+#        access:
+#          search:
+#            names:
+#              - kibana_sample_data_ecommerce
   nodeSets:
     - name: default
       config:
@@ -84,3 +89,40 @@ spec:
   count: 1
   elasticsearchRef:
     name: "cluster2"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns3
+---
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: cluster3
+  namespace: ns3
+spec:
+  version: 8.15.0
+  remoteClusterServer:
+    enabled: true
+  nodeSets:
+    - name: default
+      config:
+        node.store.allow_mmap: false
+        remote_cluster_server.enabled: true
+      count: 1
+---
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: kibana
+  namespace: ns3
+spec:
+  http:
+    service:
+      spec:
+        # expose this cluster Service with a LoadBalancer
+        type: LoadBalancer
+  version: 8.15.0
+  count: 1
+  elasticsearchRef:
+    name: "cluster3"

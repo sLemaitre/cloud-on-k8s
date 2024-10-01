@@ -96,9 +96,13 @@ func reconcileAPIKeys(
 				}
 			}
 		}
-		if err := apiKeyStore.Save(ctx, c, remoteEs); err != nil {
-			return err
-		}
+	}
+
+	// Delete all the keys related to that local cluster which are not expected.
+	currentAliases := apiKeyStore.AliasesFor(localES.Namespace, localES.Name)
+
+	if err := apiKeyStore.Save(ctx, c, remoteEs); err != nil {
+		return err
 	}
 	return nil
 }
