@@ -167,10 +167,25 @@ func doReconcile(
 		return reconcile.Result{}, err
 	}
 
+	localClusterSupportClusterAPIKeys, err := localEs.SupportRemoteClusterAPIKeys()
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	var activeAPIKeys esclient.CrossClusterAPIKeyList
+	if localClusterSupportClusterAPIKeys {
+		// Get all the API Keys, for that specific client, on the reconciled cluster.
+		getCrossClusterAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, "eck-*")
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		activeAPIKeys = getCrossClusterAPIKeys
+	}
+
 	results := &reconciler.Results{}
 	// Create or update expected remote CA
 	for remoteEsKey, remoteClusters := range expectedRemoteClusters {
-		// Get the remote Elasticsearch cluster associated with this remote CA
+		// Get the remote/client Elasticsearch cluster associated with this local/reconciled cluster.
 		remoteEs := &esv1.Elasticsearch{}
 		if err := r.Client.Get(ctx, remoteEsKey, remoteEs); err != nil {
 			if errors.IsNotFound(err) {
@@ -192,16 +207,36 @@ func doReconcile(
 		if results.HasError() {
 			return results.Aggregate()
 		}
-		supportRemoteClusterAPIKeys, err := remoteEs.SupportRemoteClusterAPIKeys()
+
+		// RCS2, first check that both the reconciled and the client clusters are compatible.
+		clientClusterSupportClusterAPIKeys, err := remoteEs.SupportRemoteClusterAPIKeys()
 		if err != nil {
 			results.WithError(err)
 			continue
 		}
 
-		if !supportRemoteClusterAPIKeys {
+		// TODO: Log an error/event if client cluster expects RCS2 while reconciled is not compatible.
+		if !(clientClusterSupportClusterAPIKeys && localClusterSupportClusterAPIKeys) {
 			continue
 		}
-		results.WithError(reconcileAPIKeys(ctx, r.Client, localEs, remoteEs, remoteClusters, esClient))
+		// Reconcile the API Keys.
+		results.WithError(reconcileAPIKeys(ctx, r.Client, activeAPIKeys, localEs, remoteEs, remoteClusters, esClient))
+	}
+
+	if localClusterSupportClusterAPIKeys {
+		// Delete orphaned API keys from clusters which have been deleted
+		for _, activeAPIKey := range activeAPIKeys.APIKeys {
+			clientCluster, err := activeAPIKey.GetElasticsearchName()
+			if err != nil {
+				results.WithError(err)
+				continue
+			}
+			if _, exists := expectedRemoteClusters[clientCluster]; exists {
+				continue
+			}
+			// Unexpected API Key
+			results.WithError(esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name))
+		}
 	}
 
 	// Delete existing but not expected remote CA

@@ -20,17 +20,12 @@ import (
 func reconcileAPIKeys(
 	ctx context.Context,
 	c k8s.Client,
+	activeAPIKeys esclient.CrossClusterAPIKeyList, // all the API Keys in the reconciled/local cluster
 	reconciledES *esv1.Elasticsearch, // the Elasticsearch cluster being reconciled, where the API keys must be created/invalidated.
 	clientES *esv1.Elasticsearch, // the remote Elasticsearch cluster which is going to act as the client, where the API keys are going to be store in the keystore Secret.
 	remoteClusters []esv1.RemoteCluster, // the expected API keys for that client cluster
 	esClient esclient.Client, // ES client for the remote cluster which is going to act as the client
 ) error {
-	// Get all the API Keys, for that specific client, on the reconciled cluster.
-	activeAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, fmt.Sprintf("eck-%s-%s-*", clientES.Namespace, clientES.Name))
-	if err != nil {
-		return err
-	}
-
 	// We may have to inject new API keystore in the client keystore.
 	apiKeyStore, err := LoadAPIKeyStore(ctx, c, clientES)
 	if err != nil {
