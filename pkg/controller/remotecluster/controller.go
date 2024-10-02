@@ -7,6 +7,8 @@ package remotecluster
 import (
 	"context"
 	"fmt"
+	commonesclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/esclient"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/services"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"time"
 
@@ -23,7 +25,6 @@ import (
 	esv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/elasticsearch/v1"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/association"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common"
-	commonesclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/esclient"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/license"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/operator"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/reconciler"
@@ -44,7 +45,7 @@ const (
 )
 
 var (
-	defaultRequeue = reconcile.Result{Requeue: true, RequeueAfter: 20 * time.Second}
+	defaultRequeue = reconcile.Result{Requeue: true, RequeueAfter: 10 * time.Second}
 )
 
 // Add creates a new RemoteCa Controller and adds it to the manager with default RBAC.
@@ -106,13 +107,7 @@ func (r *ReconcileRemoteCa) Reconcile(ctx context.Context, request reconcile.Req
 		ulog.FromContext(ctx).Info("Object is currently not managed by this controller. Skipping reconciliation", "namespace", es.Namespace, "es_name", es.Name)
 		return reconcile.Result{}, nil
 	}
-
-	esClient, err := commonesclient.NewClient(ctx, r.Client, r.Dialer, es)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	return doReconcile(ctx, r, &es, esClient)
+	return doReconcile(ctx, r, &es)
 }
 
 // deleteAllRemoteCa deletes all associated remote certificate authorities
@@ -137,7 +132,6 @@ func doReconcile(
 	ctx context.Context,
 	r *ReconcileRemoteCa,
 	localEs *esv1.Elasticsearch,
-	esClient esclient.Client,
 ) (reconcile.Result, error) {
 	log := ulog.FromContext(ctx)
 
@@ -168,13 +162,29 @@ func doReconcile(
 		return reconcile.Result{}, err
 	}
 
+	var (
+		activeAPIKeys esclient.CrossClusterAPIKeyList
+		esClient      esclient.Client
+	)
 	localClusterSupportClusterAPIKeys, err := localEs.SupportRemoteClusterAPIKeys()
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-
-	var activeAPIKeys esclient.CrossClusterAPIKeyList
+	results := &reconciler.Results{}
 	if localClusterSupportClusterAPIKeys {
+		// Check if the ES API is available. We need it to create, update and invalidate
+		// API keys in this cluster.
+		if !services.NewElasticsearchURLProvider(*localEs, r.Client).HasEndpoints() {
+			log.Info("Elasticsearch API is not available yet")
+			return results.WithResult(defaultRequeue).Aggregate()
+		}
+		// Create a new client
+		newEsClient, err := commonesclient.NewClient(ctx, r.Client, r.Dialer, *localEs)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		// Check that the API is available
+		esClient = newEsClient
 		// Get all the API Keys, for that specific client, on the reconciled cluster.
 		getCrossClusterAPIKeys, err := esClient.GetCrossClusterAPIKeys(ctx, "eck-*")
 		if err != nil {
@@ -183,7 +193,6 @@ func doReconcile(
 		activeAPIKeys = getCrossClusterAPIKeys
 	}
 
-	results := &reconciler.Results{}
 	// Create or update expected remote CA
 	for remoteEsKey, remoteClusters := range expectedRemoteClusters {
 		// Get the remote/client Elasticsearch cluster associated with this local/reconciled cluster.
@@ -238,6 +247,7 @@ func doReconcile(
 				continue
 			}
 			// Unexpected API Key
+			log.Info(fmt.Sprintf("Invalidating unexpected API key %s", activeAPIKey.Name))
 			results.WithError(esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name))
 		}
 
@@ -255,6 +265,7 @@ func doReconcile(
 				continue
 			}
 			// Unexpected
+			log.Info(fmt.Sprintf("Removing unexpected remote API key %s", alias))
 			apiKeyStore.Delete(alias)
 		}
 		results.WithError(apiKeyStore.Save(ctx, r.Client, localEs))
