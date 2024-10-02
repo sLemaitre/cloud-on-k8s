@@ -33,6 +33,25 @@ func addWatches(mgr manager.Manager, c controller.Controller, r *ReconcileRemote
 		return err
 	}
 
+	// Emit changes to remote clusters to update API keys.
+	if err := c.Watch(
+		source.Kind(
+			mgr.GetCache(),
+			&esv1.Elasticsearch{},
+			handler.TypedEnqueueRequestsFromMapFunc[*esv1.Elasticsearch, reconcile.Request](
+				func(ctx context.Context, elasticsearch *esv1.Elasticsearch) []reconcile.Request {
+					requests := make([]reconcile.Request, 0, len(elasticsearch.Spec.RemoteClusters))
+					for _, remoteCluster := range elasticsearch.Spec.RemoteClusters {
+						requests = append(requests, reconcile.Request{NamespacedName: remoteCluster.ElasticsearchRef.WithDefaultNamespace(elasticsearch.Namespace).NamespacedName()})
+					}
+					return requests
+				},
+			),
+		),
+	); err != nil {
+		return err
+	}
+
 	// Watch Secrets that contain:
 	//  * Remote certificate authorities managed by this controller.
 	//  * API keys
