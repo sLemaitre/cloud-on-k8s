@@ -99,7 +99,11 @@ func reconcileAPIKeys(
 	}
 
 	// Delete all the keys related to that local cluster which are not expected.
-	for keyName := range activeAPIKeys.KeyNames() {
+	activeAPIKeysForClientCluster, err := activeAPIKeys.ForCluster(clientES.Namespace, clientES.Name)
+	if err != nil {
+		return err
+	}
+	for keyName := range activeAPIKeysForClientCluster.KeyNames() {
 		if !expectedKeys.Has(keyName) {
 			// Unexpected key let's invalidate it.
 			if err := esClient.InvalidateCrossClusterAPIKey(ctx, keyName); err != nil {

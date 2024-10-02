@@ -129,6 +129,26 @@ func (cl *CrossClusterAPIKeyList) GetActiveKey() (*CrossClusterAPIKey, error) {
 	return &activeAPIKey, nil
 }
 
+// ForCluster returns all the API keys related to a specific client cluster.
+func (cl *CrossClusterAPIKeyList) ForCluster(namespace string, name string) (*CrossClusterAPIKeyList, error) {
+	if cl == nil || cl.APIKeys == nil {
+		return nil, nil
+	}
+	crossClusterAPIKeyList := &CrossClusterAPIKeyList{
+		APIKeys: make([]CrossClusterAPIKey, 0, len(cl.APIKeys)),
+	}
+	for _, apiKey := range cl.APIKeys {
+		elasticsearchName, err := apiKey.GetElasticsearchName()
+		if err != nil {
+			return nil, err
+		}
+		if elasticsearchName.Namespace == namespace && elasticsearchName.Name == name {
+			crossClusterAPIKeyList.APIKeys = append(crossClusterAPIKeyList.APIKeys, apiKey)
+		}
+	}
+	return crossClusterAPIKeyList, nil
+}
+
 type CrossClusterAPIKey struct {
 	ID       string                 `json:"id,omitempty"`
 	Name     string                 `json:"name,omitempty"`

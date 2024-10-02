@@ -171,7 +171,7 @@ func doReconcile(
 		return reconcile.Result{}, err
 	}
 	results := &reconciler.Results{}
-	if localClusterSupportClusterAPIKeys {
+	if localClusterSupportClusterAPIKeys.IsTrue() {
 		// Check if the ES API is available. We need it to create, update and invalidate
 		// API keys in this cluster.
 		if !services.NewElasticsearchURLProvider(*localEs, r.Client).HasEndpoints() {
@@ -225,15 +225,21 @@ func doReconcile(
 			continue
 		}
 
-		// TODO: Log an error/event if client cluster expects RCS2 while reconciled is not compatible.
-		if !(clientClusterSupportClusterAPIKeys && localClusterSupportClusterAPIKeys) {
+		if clientClusterSupportClusterAPIKeys.IsFalse() && localClusterSupportClusterAPIKeys.IsTrue() {
+			err := fmt.Errorf("client cluster %s/%s is running version %s which does not support remote cluster keys", remoteEs.Namespace, remoteEs.Name, remoteEs.Spec.Version)
+			log.Error(err, "cannot configure remote cluster settings",
+				"local_namespace", localEs.Namespace,
+				"local_name", localEs.Name,
+				"remote_namespace", remoteEs.Namespace,
+				"remote_name", remoteEs.Name,
+			)
 			continue
 		}
 		// Reconcile the API Keys.
 		results.WithError(reconcileAPIKeys(ctx, r.Client, activeAPIKeys, localEs, remoteEs, remoteClusters, esClient))
 	}
 
-	if localClusterSupportClusterAPIKeys {
+	if localClusterSupportClusterAPIKeys.IsTrue() {
 		// **************************************************************
 		// Delete orphaned API keys from clusters which have been deleted
 		// **************************************************************
@@ -308,7 +314,7 @@ func getExpectedRemoteClusters(
 	c k8s.Client,
 	associatedEs *esv1.Elasticsearch,
 ) (map[types.NamespacedName][]esv1.RemoteCluster, error) {
-	span, _ := apm.StartSpan(ctx, "get_expected_remote_ca", tracing.SpanTypeApp)
+	span, _ := apm.StartSpan(ctx, "get_expected_remote_clusters", tracing.SpanTypeApp)
 	defer span.End()
 	expectedRemoteClusters := make(map[types.NamespacedName][]esv1.RemoteCluster)
 
