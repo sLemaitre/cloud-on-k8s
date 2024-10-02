@@ -7,16 +7,18 @@ package remotecluster
 import (
 	"context"
 	"fmt"
-	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/hash"
-	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/k8s"
+
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	esv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/elasticsearch/v1"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/hash"
 	esclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/client"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/k8s"
+	ulog "github.com/elastic/cloud-on-k8s/v2/pkg/utils/log"
 )
 
-// reconcileAPIKeys creates or updates the API Keys for the remoteEs cluster,
-// which may have several references (remoteClusters) to the cluster being reconciled.
+// reconcileAPIKeys creates or updates the API Keys for the remote/client cluster,
+// which may have several references (.Spec.RemoteClusters) to the cluster being reconciled.
 func reconcileAPIKeys(
 	ctx context.Context,
 	c k8s.Client,
@@ -32,6 +34,7 @@ func reconcileAPIKeys(
 		return err
 	}
 
+	log := ulog.FromContext(ctx)
 	// Maintain a list of the expected API keys to detect the ones which are no longer expected in the reconciled cluster.
 	expectedKeys := sets.New[string]()
 	for _, remoteCluster := range remoteClusters {
@@ -39,6 +42,12 @@ func reconcileAPIKeys(
 		expectedKeys.Insert(apiKeyName)
 		if remoteCluster.APIKey == nil {
 			// This cluster is not configure with API keys, attempt to invalidate any key and continue.
+			log.Info("Invalidating API key as remote cluster is not configured to use it",
+				"local_namespace", reconciledES.Namespace,
+				"local_name", reconciledES.Name,
+				"remote_namespace", clientES.Namespace,
+				"remote_name", clientES.Name,
+				"alias", remoteCluster.Name)
 			if err := esClient.InvalidateCrossClusterAPIKey(ctx, apiKeyName); err != nil {
 				return err
 			}
@@ -49,6 +58,13 @@ func reconcileAPIKeys(
 		// 2.1 If not exist create it in the reconciled cluster.
 		expectedHash := hash.HashObject(remoteCluster.APIKey)
 		if activeAPIKey == nil {
+			log.Info("Creating API key",
+				"local_namespace", reconciledES.Namespace,
+				"local_name", reconciledES.Name,
+				"remote_namespace", clientES.Namespace,
+				"remote_name", clientES.Name,
+				"alias", remoteCluster.Name,
+				"key", apiKeyName)
 			apiKey, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
 				Name: apiKeyName,
 				CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
@@ -73,6 +89,13 @@ func reconcileAPIKeys(
 			if apiKeyStore.KeyIDFor(remoteCluster.Name) != activeAPIKey.ID {
 				// We have a problem here, the API Key ID in Elasticsearch does not match the API Key recorded in the Secret.
 				// Invalidate the API Key in ES and requeue
+				log.Info("Invalidating API key as it does not match the one in keystore",
+					"local_namespace", reconciledES.Namespace,
+					"local_name", reconciledES.Name,
+					"remote_namespace", clientES.Namespace,
+					"remote_name", clientES.Name,
+					"alias", remoteCluster.Name,
+					"key", apiKeyName)
 				if err := esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name); err != nil {
 					return err
 				}
@@ -80,6 +103,12 @@ func reconcileAPIKeys(
 			}
 			currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
 			if currentHash != expectedHash {
+				log.Info("Updating API key",
+					"local_namespace", reconciledES.Namespace,
+					"local_name", reconciledES.Name,
+					"remote_namespace", clientES.Namespace,
+					"remote_name", clientES.Name,
+					"alias", remoteCluster.Name)
 				// Update the Key
 				_, err := esClient.UpdateCrossClusterAPIKey(ctx, activeAPIKey.ID, esclient.CrossClusterAPIKeyUpdateRequest{
 					RemoteClusterAPIKey: *remoteCluster.APIKey,
@@ -106,6 +135,12 @@ func reconcileAPIKeys(
 	for keyName := range activeAPIKeysForClientCluster.KeyNames() {
 		if !expectedKeys.Has(keyName) {
 			// Unexpected key let's invalidate it.
+			log.Info("Invalidating API key as it does not match the one in keystore",
+				"local_namespace", reconciledES.Namespace,
+				"local_name", reconciledES.Name,
+				"remote_namespace", clientES.Namespace,
+				"remote_name", clientES.Name,
+				"key", keyName)
 			if err := esClient.InvalidateCrossClusterAPIKey(ctx, keyName); err != nil {
 				return err
 			}
