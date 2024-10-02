@@ -7,6 +7,7 @@ package remotecluster
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"time"
 
 	"go.elastic.co/apm/v2"
@@ -224,7 +225,9 @@ func doReconcile(
 	}
 
 	if localClusterSupportClusterAPIKeys {
+		// **************************************************************
 		// Delete orphaned API keys from clusters which have been deleted
+		// **************************************************************
 		for _, activeAPIKey := range activeAPIKeys.APIKeys {
 			clientCluster, err := activeAPIKey.GetElasticsearchName()
 			if err != nil {
@@ -237,6 +240,24 @@ func doReconcile(
 			// Unexpected API Key
 			results.WithError(esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name))
 		}
+
+		// *********************************************
+		// Delete unexpected keys in the local keystore.
+		// *********************************************
+		expectedAliases := expectedAliases(localEs.Spec.RemoteClusters)
+		apiKeyStore, err := LoadAPIKeyStore(ctx, r.Client, localEs)
+		if err != nil {
+			return results.WithError(err).Aggregate()
+		}
+		for alias := range apiKeyStore.aliases {
+			if expectedAliases.Has(alias) {
+				// Expected alias
+				continue
+			}
+			// Unexpected
+			apiKeyStore.Delete(alias)
+		}
+		results.WithError(apiKeyStore.Save(ctx, r.Client, localEs))
 	}
 
 	// Delete existing but not expected remote CA
@@ -250,6 +271,18 @@ func doReconcile(
 		results.WithError(deleteCertificateAuthorities(ctx, r, localClusterKey, toDelete))
 	}
 	return results.WithResult(association.RequeueRbacCheck(r.accessReviewer)).Aggregate()
+}
+
+func expectedAliases(remoteClusters []esv1.RemoteCluster) sets.Set[string] {
+	aliases := sets.New[string]()
+	for _, remoteCluster := range remoteClusters {
+		if remoteCluster.APIKey == nil {
+			// Not using remote cluster server.
+			continue
+		}
+		aliases.Insert(remoteCluster.Name)
+	}
+	return aliases
 }
 
 func caCertMissingError(cluster types.NamespacedName) string {
