@@ -6,125 +6,32 @@ package remotecluster
 
 import (
 	"context"
+	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
 	esv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/elasticsearch/v1"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/certificates"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/license"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/watches"
-	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/certificates/transport"
+	esclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/client"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/k8s"
+	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/net"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/utils/rbac"
 )
 
-type clusterBuilder struct {
-	name, namespace string
-	remoteClusters  []commonv1.ObjectSelector
-}
-
-func newClusteBuilder(namespace, name string) *clusterBuilder {
-	return &clusterBuilder{
-		name:      name,
-		namespace: namespace,
-	}
-}
-
-func (cb *clusterBuilder) withRemoteCluster(namespace, name string) *clusterBuilder {
-	cb.remoteClusters = append(cb.remoteClusters, commonv1.ObjectSelector{
-		Name:      name,
-		Namespace: namespace,
-	})
-	return cb
-}
-
-func (cb *clusterBuilder) build() *esv1.Elasticsearch {
-	remoteClusters := make([]esv1.RemoteCluster, len(cb.remoteClusters))
-	for i, remoteCluster := range cb.remoteClusters {
-		remoteClusters[i] = esv1.RemoteCluster{
-			ElasticsearchRef: commonv1.LocalObjectSelector{
-				Name:      remoteCluster.Name,
-				Namespace: remoteCluster.Namespace,
-			}}
-	}
-
-	return &esv1.Elasticsearch{
-		ObjectMeta: v1.ObjectMeta{
-			Namespace: cb.namespace,
-			Name:      cb.name,
-		},
-		Spec: esv1.ElasticsearchSpec{
-			RemoteClusters: remoteClusters,
-		},
-	}
-}
-
-type fakeAccessReviewer struct {
-	allowed bool
-	err     error
-}
-
-func (f *fakeAccessReviewer) AccessAllowed(_ context.Context, _ string, _ string, _ runtime.Object) (bool, error) {
-	return f.allowed, f.err
-}
-
-func fakePublicCa(namespace, name string) *corev1.Secret {
-	namespacedName := types.NamespacedName{
-		Name:      name,
-		Namespace: namespace,
-	}
-	transportPublicCertKey := transport.PublicCertsSecretRef(namespacedName)
-	return &corev1.Secret{
-		ObjectMeta: v1.ObjectMeta{
-			Namespace: transportPublicCertKey.Namespace,
-			Name:      transportPublicCertKey.Name,
-		},
-		Data: map[string][]byte{
-			certificates.CAFileName: []byte(namespacedName.String()),
-		},
-	}
-}
-
-// remoteCa builds an expected remote Ca
-func remoteCa(localNamespace, localName, remoteNamespace, remoteName string) *corev1.Secret {
-	remoteNamespacedName := types.NamespacedName{
-		Name:      remoteName,
-		Namespace: remoteNamespace,
-	}
-	return &corev1.Secret{
-		ObjectMeta: v1.ObjectMeta{
-			Namespace: localNamespace,
-			Name:      remoteCASecretName(localName, remoteNamespacedName),
-			Labels: map[string]string{
-				"common.k8s.elastic.co/type":                            "remote-ca",
-				"elasticsearch.k8s.elastic.co/cluster-name":             localName,
-				"elasticsearch.k8s.elastic.co/remote-cluster-name":      remoteName,
-				"elasticsearch.k8s.elastic.co/remote-cluster-namespace": remoteNamespace,
-			},
-		},
-		Data: map[string][]byte{
-			certificates.CAFileName: []byte(remoteNamespacedName.String()),
-		},
-	}
-}
-
-func withDataCert(caSecret *corev1.Secret, newCa []byte) *corev1.Secret {
-	caSecret.Data[certificates.CAFileName] = newCa
-	return caSecret
-}
-
-func TestReconcileRemoteCa_Reconcile(t *testing.T) {
+func TestRemoteCluster_Reconcile(t *testing.T) {
 	type fields struct {
 		clusters       []client.Object
 		accessReviewer rbac.AccessReviewer
@@ -133,25 +40,38 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 	type args struct {
 		request reconcile.Request
 	}
+	type wantEsAPICalls struct {
+		getCrossClusterAPIKeys           []string
+		invalidateCrossClusterAPIKey     []string
+		crossClusterAPIKeyCreateRequests []esclient.CrossClusterAPIKeyCreateRequest
+		updateCrossClusterAPIKey         map[string]esclient.CrossClusterAPIKeyUpdateRequest
+	}
 	tests := []struct {
 		name   string
 		fields fields
 		args   args
 
-		expectedSecrets   []*corev1.Secret
+		expectedCASecrets []*corev1.Secret
 		unexpectedSecrets []types.NamespacedName
 		want              reconcile.Result
 		wantErr           bool
+
+		// API keys fake client and expected resources.
+		fakeESClient            *fakeESClient
+		wantEsAPICalls          wantEsAPICalls
+		expectedKeystoreSecrets []*corev1.Secret
 	}{
 		{
 			name: "Simple remote cluster ns1/es1 -> ns2/es2",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").withRemoteCluster("ns2", "es2").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").build(),
-					fakePublicCa("ns2", "es2"),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
 			},
@@ -163,7 +83,7 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			expectedSecrets: []*corev1.Secret{
+			expectedCASecrets: []*corev1.Secret{
 				remoteCa("ns1", "es1", "ns2", "es2"),
 				remoteCa("ns2", "es2", "ns1", "es1"),
 			},
@@ -171,14 +91,16 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Bi-directional remote cluster ns1/es1 <-> ns2/es2",
+			name: "[No API Keys] Bi-directional remote cluster ns1/es1 <-> ns2/es2",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").withRemoteCluster("ns2", "es2").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").withRemoteCluster("ns1", "es1").build(),
-					fakePublicCa("ns2", "es2"),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").withRemoteCluster("ns1", "es1").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
 			},
@@ -190,24 +112,561 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			expectedSecrets: []*corev1.Secret{
+			expectedCASecrets: []*corev1.Secret{
 				remoteCa("ns1", "es1", "ns2", "es2"),
 				remoteCa("ns2", "es2", "ns1", "es1"),
 			},
 			want:    reconcile.Result{},
 			wantErr: false,
+		},
+		{
+			// The test below simulates the following situation:
+			// * ns1/es1 is the cluster reconciled.
+			// * ns1/es2 is the client cluster.
+			name: "With API Keys, simple topology",
+			fields: fields{
+				clusters: slices.Concat(
+					// Clusters
+					newClusterBuilder("ns1", "es1", "8.15.0").build(),
+					newClusterBuilder("ns1", "es2", "8.15.0").
+						// es2 -> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					[]client.Object{
+						// Certificates
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns1", "es2"),
+					},
+				),
+				accessReviewer: &fakeAccessReviewer{allowed: true},
+				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
+			},
+			args: args{
+				request: reconcile.Request{
+					// reconciled cluster is es1
+					NamespacedName: types.NamespacedName{
+						Name:      "es1",
+						Namespace: "ns1",
+					},
+				},
+			},
+			expectedCASecrets: []*corev1.Secret{
+				remoteCa("ns1", "es1", "ns1", "es2"),
+				remoteCa("ns1", "es2", "ns1", "es1"),
+			},
+			wantEsAPICalls: wantEsAPICalls{
+				getCrossClusterAPIKeys: []string{"eck-*"},
+				crossClusterAPIKeyCreateRequests: []esclient.CrossClusterAPIKeyCreateRequest{
+					{
+						Name: "eck-ns1-es2-generated-ns1-es1-0-with-api-key",
+						CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "1384987056",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es2",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns1",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+					},
+				},
+			},
+			expectedKeystoreSecrets: []*corev1.Secret{
+				{
+					// Keystore for es2 must be updated.
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"eck-ns2-es2-generated-ns1-es1-0-with-api-key-1"}}`,
+						},
+						Labels: map[string]string{
+							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+							"eck.k8s.elastic.co/credentials":            "true",
+							"elasticsearch.k8s.elastic.co/cluster-name": "es2",
+						},
+						Namespace: "ns2",
+						Name:      "es2-es-remote-api-keys",
+					},
+					Data: map[string][]byte{
+						"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-eck-ns2-es2-generated-ns1-es1-0-with-api-key-1"),
+					},
+				},
+			},
+		},
+		{
+			// The test below simulates the following situation:
+			// * ns1/es1 is the cluster reconciled.
+			// * There are 3 remote cluster accessing ns1/es1:
+			//   * ns2/es2: new cluster, API key must be created
+			//   * ns3/es3: new cluster, API key must be created
+			//   * ns4/es4: existing remote cluster: one key must be updated, the other one must be deleted.
+			//   * ns/es5: this cluster no long exists, key must be deleted.
+			name: "With API Keys",
+			fields: fields{
+				clusters: slices.Concat(
+					// Clusters
+					newClusterBuilder("ns1", "es1", "8.15.0").
+						// es1 -> es2
+						withAPIKey("ns2", "es2", &esv1.RemoteClusterAPIKey{}).
+						// es1 -> es3
+						withAPIKey("ns3", "es3", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					newClusterBuilder("ns2", "es2", "8.15.0").
+						// es2 -> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					newClusterBuilder("ns3", "es3", "8.15.0").
+						// es3 -> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					newClusterBuilder("ns4", "es4", "8.15.0").
+						// es4-> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					[]client.Object{
+						// Certificates
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+						fakePublicCa("ns3", "es3"),
+						fakePublicCa("ns4", "es4"),
+						// Assume that ns2/es2 has already a key in its keystore, the goal is to test that the existing keys are not altered.
+						&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"existing-api-key-to-esx":{"namespace":"foo","name":"bar","id":"apikey-to-esx"}}`,
+								},
+								Labels: map[string]string{
+									"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+									"eck.k8s.elastic.co/credentials":            "true",
+									"elasticsearch.k8s.elastic.co/cluster-name": "es2",
+								},
+								Namespace: "ns2",
+								Name:      "es2-es-remote-api-keys",
+								UID:       uuid.NewUUID(),
+							},
+							Data: map[string][]byte{
+								"cluster.remote.existing-api-key-to-esx.credentials": []byte("encoded-key-for-existing-api-key"),
+							},
+						},
+						// Keystore for ns4/es4, key already exists, this Secret is not expected to be modified.
+						&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"apikey-from-es4-to-es1"}}`,
+								},
+								Labels: map[string]string{
+									"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+									"eck.k8s.elastic.co/credentials":            "true",
+									"elasticsearch.k8s.elastic.co/cluster-name": "es4",
+								},
+								Namespace: "ns4",
+								Name:      "es4-es-remote-api-keys",
+								UID:       uuid.NewUUID(),
+							},
+							Data: map[string][]byte{
+								"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+							},
+						},
+						// Assume that ns1/es1 keystore already exists, unexpected keys should be removed.
+						&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns2-es2-0-with-api-key":{"namespace":"ns2","name":"es2","id":"apikey-to-es2"},"generated-ns4-es4-0-with-api-key":{"namespace":"ns2","name":"es2","id":"apikey-to-es4"},"api-key-to-non-existent-alias":{"namespace":"nsx","name":"esx","id":"apikey-to-esx"}}`,
+								},
+								Labels: map[string]string{
+									"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+									"eck.k8s.elastic.co/credentials":            "true",
+									"elasticsearch.k8s.elastic.co/cluster-name": "es1",
+								},
+								Namespace: "ns1",
+								Name:      "es1-es-remote-api-keys",
+								UID:       uuid.NewUUID(),
+							},
+							Data: map[string][]byte{
+								"cluster.remote.generated-ns2-es2-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+								"cluster.remote.generated-ns4-es4-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+								// The key below should be removed
+								"cluster.remote.api-key-to-non-existent-alias.credentials": []byte("encoded-key-for-api-for-non-existent-cluster"),
+							},
+						},
+					},
+				),
+				accessReviewer: &fakeAccessReviewer{allowed: true},
+				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
+			},
+			args: args{
+				request: reconcile.Request{
+					// reconciled cluster is es1
+					NamespacedName: types.NamespacedName{
+						Name:      "es1",
+						Namespace: "ns1",
+					},
+				},
+			},
+			expectedCASecrets: []*corev1.Secret{
+				remoteCa("ns1", "es1", "ns2", "es2"),
+				remoteCa("ns2", "es2", "ns1", "es1"),
+			},
+			want: reconcile.Result{},
+			fakeESClient: &fakeESClient{
+				existingCrossClusterAPIKeys: esclient.CrossClusterAPIKeyList{
+					// API key for es4 already exists but with a wrong hash we should expect an update.
+					APIKeys: []esclient.CrossClusterAPIKey{
+						{
+							ID:   "apikey-from-es4-to-es1",
+							Name: "eck-ns4-es4-generated-ns1-es1-0-with-api-key",
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "unexpected-hash",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es4",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns4",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+						// The key below belongs to a cluster which no longer exists, it must be invalidated.
+						{
+							ID:   "apikey-from-es5-to-es1",
+							Name: "eck-ns5-es5-generated-ns1-es1-0-with-api-key",
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "1384987056",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es5",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns5",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+						// The key below belongs to the existing cluster es4 which is no longer referencing es1 using that alias, it must be invalidated.
+						{
+							ID:   "apikey-from-es4-to-es1-old-alias",
+							Name: "eck-ns4-es4-to-ns1-es1-0-old-alias",
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "unexpected-hash",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es4",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns4",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+					},
+				},
+			},
+			wantEsAPICalls: wantEsAPICalls{
+				getCrossClusterAPIKeys:       []string{"eck-*"},
+				invalidateCrossClusterAPIKey: []string{"eck-ns4-es4-to-ns1-es1-0-old-alias", "eck-ns5-es5-generated-ns1-es1-0-with-api-key"},
+				updateCrossClusterAPIKey: map[string]esclient.CrossClusterAPIKeyUpdateRequest{
+					"apikey-from-es4-to-es1": {
+						RemoteClusterAPIKey: esv1.RemoteClusterAPIKey{},
+						Metadata: map[string]any{
+							"elasticsearch.k8s.elastic.co/config-hash": "1384987056",
+							"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+							"elasticsearch.k8s.elastic.co/name":        "es4",
+							"elasticsearch.k8s.elastic.co/namespace":   "ns4",
+							"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+						},
+					},
+				},
+				// We expect 2 keys to be created for ns1/es1
+				crossClusterAPIKeyCreateRequests: []esclient.CrossClusterAPIKeyCreateRequest{
+					{
+						Name: "eck-ns2-es2-generated-ns1-es1-0-with-api-key",
+						CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "1384987056",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es2",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns2",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+					},
+					{
+						Name: "eck-ns3-es3-generated-ns1-es1-0-with-api-key",
+						CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "1384987056",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es3",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns3",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+					},
+				},
+			},
+			expectedKeystoreSecrets: []*corev1.Secret{
+				// Unexpected keys in es1 keystore must be removed.
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns2-es2-0-with-api-key":{"namespace":"ns2","name":"es2","id":"apikey-to-es2"}}`,
+						},
+						Labels: map[string]string{
+							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+							"eck.k8s.elastic.co/credentials":            "true",
+							"elasticsearch.k8s.elastic.co/cluster-name": "es1",
+						},
+						Namespace: "ns1",
+						Name:      "es1-es-remote-api-keys",
+					},
+					Data: map[string][]byte{
+						"cluster.remote.generated-ns2-es2-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+					},
+				},
+				{
+					// Keystore for es2 must be updated.
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"existing-api-key-to-esx":{"namespace":"foo","name":"bar","id":"apikey-to-esx"},"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"eck-ns2-es2-generated-ns1-es1-0-with-api-key-1"}}`,
+						},
+						Labels: map[string]string{
+							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+							"eck.k8s.elastic.co/credentials":            "true",
+							"elasticsearch.k8s.elastic.co/cluster-name": "es2",
+						},
+						Namespace: "ns2",
+						Name:      "es2-es-remote-api-keys",
+					},
+					Data: map[string][]byte{
+						"cluster.remote.existing-api-key-to-esx.credentials":          []byte("encoded-key-for-existing-api-key"),
+						"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-eck-ns2-es2-generated-ns1-es1-0-with-api-key-1"),
+					},
+				},
+				{
+					// Keystore for es3 must be created.
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"eck-ns3-es3-generated-ns1-es1-0-with-api-key-2"}}`,
+						},
+						Labels: map[string]string{
+							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+							"eck.k8s.elastic.co/credentials":            "true",
+							"elasticsearch.k8s.elastic.co/cluster-name": "es3",
+						},
+						Namespace: "ns3",
+						Name:      "es3-es-remote-api-keys",
+					},
+					Data: map[string][]byte{
+						"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-eck-ns3-es3-generated-ns1-es1-0-with-api-key-2"),
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"apikey-from-es4-to-es1"}}`,
+						},
+						Labels: map[string]string{
+							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+							"eck.k8s.elastic.co/credentials":            "true",
+							"elasticsearch.k8s.elastic.co/cluster-name": "es4",
+						},
+						Namespace: "ns4",
+						Name:      "es4-es-remote-api-keys",
+					},
+					Data: map[string][]byte{
+						"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+					},
+				},
+			},
+		},
+		{
+			// Same test as above but the associations are no longer permitted.
+			// * ns1/es1 is the cluster reconciled.
+			// * There are 3 remote cluster accessing ns1/es1:
+			//   * ns2/es2: new cluster, API key must not be created
+			//   * ns3/es3: new cluster, API key must not be created
+			//   * ns4/es4: existing remote cluster: 2 keys must be deleted.
+			//   * ns/es5: this cluster no long exists, key must be deleted.
+			name: "With API Keys: associations are no longer permitted",
+			fields: fields{
+				clusters: slices.Concat(
+					// Clusters
+					newClusterBuilder("ns1", "es1", "8.15.0").
+						// es1 -> es2
+						withAPIKey("ns2", "es2", &esv1.RemoteClusterAPIKey{}).
+						// es1 -> es3
+						withAPIKey("ns3", "es3", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					newClusterBuilder("ns2", "es2", "8.15.0").
+						// es2 -> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					newClusterBuilder("ns3", "es3", "8.15.0").
+						// es3 -> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					newClusterBuilder("ns4", "es4", "8.15.0").
+						// es4-> es1
+						withAPIKey("ns1", "es1", &esv1.RemoteClusterAPIKey{}).
+						build(),
+					[]client.Object{
+						// Certificates
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+						fakePublicCa("ns3", "es3"),
+						fakePublicCa("ns4", "es4"),
+						// Assume that ns2/es2 has already a key in its keystore, the goal is to test that the existing keys are not altered.
+						&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"existing-api-key-to-esx":{"namespace":"foo","name":"bar","id":"apikey-to-esx"}}`,
+								},
+								Labels: map[string]string{
+									"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+									"eck.k8s.elastic.co/credentials":            "true",
+									"elasticsearch.k8s.elastic.co/cluster-name": "es2",
+								},
+								Namespace: "ns2",
+								Name:      "es2-es-remote-api-keys",
+								UID:       uuid.NewUUID(),
+							},
+							Data: map[string][]byte{
+								"cluster.remote.existing-api-key-to-esx.credentials": []byte("encoded-key-for-existing-api-key"),
+							},
+						},
+						// Keystore for ns4/es4, key already exists, this Secret must be deleted since association is no longer permitted.
+						&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"apikey-from-es4-to-es1"}}`,
+								},
+								Labels: map[string]string{
+									"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+									"eck.k8s.elastic.co/credentials":            "true",
+									"elasticsearch.k8s.elastic.co/cluster-name": "es4",
+								},
+								Namespace: "ns4",
+								Name:      "es4-es-remote-api-keys",
+								UID:       uuid.NewUUID(),
+							},
+							Data: map[string][]byte{
+								"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+							},
+						},
+						// Assume that ns1/es1 keystore already exists, unexpected keys should be removed.
+						&corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{
+								Annotations: map[string]string{
+									"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns2-es2-0-with-api-key":{"namespace":"ns2","name":"es2","id":"apikey-to-es2"},"generated-ns4-es4-0-with-api-key":{"namespace":"ns2","name":"es2","id":"apikey-to-es4"},"api-key-to-non-existent-alias":{"namespace":"nsx","name":"esx","id":"apikey-to-esx"}}`,
+								},
+								Labels: map[string]string{
+									"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+									"eck.k8s.elastic.co/credentials":            "true",
+									"elasticsearch.k8s.elastic.co/cluster-name": "es1",
+								},
+								Namespace: "ns1",
+								Name:      "es1-es-remote-api-keys",
+								UID:       uuid.NewUUID(),
+							},
+							Data: map[string][]byte{
+								"cluster.remote.generated-ns2-es2-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+								"cluster.remote.generated-ns4-es4-0-with-api-key.credentials": []byte("encoded-key-for-existing-api-key"),
+								// The key below should be removed
+								"cluster.remote.api-key-to-non-existent-alias.credentials": []byte("encoded-key-for-api-for-non-existent-cluster"),
+							},
+						},
+					},
+				),
+				accessReviewer: &fakeAccessReviewer{allowed: false},
+				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
+			},
+			args: args{
+				request: reconcile.Request{
+					// reconciled cluster is es1
+					NamespacedName: types.NamespacedName{
+						Name:      "es1",
+						Namespace: "ns1",
+					},
+				},
+			},
+			fakeESClient: &fakeESClient{
+				existingCrossClusterAPIKeys: esclient.CrossClusterAPIKeyList{
+					// API key for es4 already exists but with a wrong hash we should expect an update.
+					APIKeys: []esclient.CrossClusterAPIKey{
+						{
+							ID:   "apikey-from-es4-to-es1",
+							Name: "eck-ns4-es4-generated-ns1-es1-0-with-api-key",
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "unexpected-hash",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es4",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns4",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+						// The key below belongs to a cluster which no longer exists, it must be invalidated.
+						{
+							ID:   "apikey-from-es5-to-es1",
+							Name: "eck-ns5-es5-generated-ns1-es1-0-with-api-key",
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "1384987056",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es5",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns5",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+						// The key below belongs to the existing cluster es4 which is no longer referencing es1 using that alias, it must be invalidated.
+						{
+							ID:   "apikey-from-es4-to-es1-old-alias",
+							Name: "eck-ns4-es4-to-ns1-es1-0-old-alias",
+							Metadata: map[string]interface{}{
+								"elasticsearch.k8s.elastic.co/config-hash": "unexpected-hash",
+								"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+								"elasticsearch.k8s.elastic.co/name":        "es4",
+								"elasticsearch.k8s.elastic.co/namespace":   "ns4",
+								"elasticsearch.k8s.elastic.co/uid":         types.UID(""),
+							},
+						},
+					},
+				},
+			},
+			wantEsAPICalls: wantEsAPICalls{
+				getCrossClusterAPIKeys:       []string{"eck-*"},
+				invalidateCrossClusterAPIKey: []string{"eck-ns4-es4-generated-ns1-es1-0-with-api-key", "eck-ns5-es5-generated-ns1-es1-0-with-api-key", "eck-ns4-es4-to-ns1-es1-0-old-alias"},
+				// No update allowed.
+				updateCrossClusterAPIKey: nil,
+				// No creation allowed.
+				crossClusterAPIKeyCreateRequests: nil,
+			},
+			unexpectedSecrets: []types.NamespacedName{
+				{Namespace: "ns1", Name: "es1-es-remote-api-keys"},
+				{Namespace: "ns3", Name: "es3-es-remote-api-keys"},
+				{Namespace: "ns4", Name: "es4-es-remote-api-keys"},
+			},
+			expectedKeystoreSecrets: []*corev1.Secret{
+				{
+					// Keystore for es2 must not be updated with es1 key.
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"existing-api-key-to-esx":{"namespace":"foo","name":"bar","id":"apikey-to-esx"}}`,
+						},
+						Labels: map[string]string{
+							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
+							"eck.k8s.elastic.co/credentials":            "true",
+							"elasticsearch.k8s.elastic.co/cluster-name": "es2",
+						},
+						Namespace: "ns2",
+						Name:      "es2-es-remote-api-keys",
+					},
+					Data: map[string][]byte{
+						// This entry is going to be removed once ns2/es2 is reconciled.
+						"cluster.remote.existing-api-key-to-esx.credentials": []byte("encoded-key-for-existing-api-key"),
+					},
+				},
+			},
 		},
 		{
 			name: "Deleted remote cluster",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").build(),
-					fakePublicCa("ns2", "es2"),
-					remoteCa("ns1", "es1", "ns2", "es2"),
-					remoteCa("ns2", "es2", "ns1", "es1"),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+						remoteCa("ns1", "es1", "ns2", "es2"),
+						remoteCa("ns2", "es2", "ns1", "es1"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
 			},
@@ -241,14 +700,16 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 		{
 			name: "CA content has been updated, remote ca must be reconciled",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").withRemoteCluster("ns2", "es2").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").build(),
-					fakePublicCa("ns2", "es2"),
-					withDataCert(remoteCa("ns1", "es1", "ns2", "es2"), []byte("foo")),
-					withDataCert(remoteCa("ns2", "es2", "ns1", "es1"), []byte("bar")),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+						withDataCert(remoteCa("ns1", "es1", "ns2", "es2"), []byte("foo")),
+						withDataCert(remoteCa("ns2", "es2", "ns1", "es1"), []byte("bar")),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
 			},
@@ -260,7 +721,7 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			expectedSecrets: []*corev1.Secret{
+			expectedCASecrets: []*corev1.Secret{
 				remoteCa("ns1", "es1", "ns2", "es2"),
 				remoteCa("ns2", "es2", "ns1", "es1"),
 			},
@@ -271,16 +732,18 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 			// ns1/es1 has been deleted - all related secrets in other namespaces must be deleted
 			name: "Deleted cluster",
 			fields: fields{
-				clusters: []client.Object{
+				clusters: slices.Concat(
 					// ns2/es2
-					newClusteBuilder("ns2", "es2").withRemoteCluster("ns1", "es1").build(),
-					fakePublicCa("ns2", "es2"),
-					remoteCa("ns2", "es2", "ns1", "es1"),
+					newClusterBuilder("ns2", "es2", "7.0.0").withRemoteCluster("ns1", "es1").build(),
 					// ns3/es3
-					newClusteBuilder("ns3", "es3").withRemoteCluster("ns1", "es1").build(),
-					fakePublicCa("ns3", "es3"),
-					remoteCa("ns3", "es3", "ns1", "es1"),
-				},
+					newClusterBuilder("ns3", "es3", "7.0.0").withRemoteCluster("ns1", "es1").build(),
+					[]client.Object{
+						fakePublicCa("ns2", "es2"),
+						remoteCa("ns2", "es2", "ns1", "es1"),
+						fakePublicCa("ns3", "es3"),
+						remoteCa("ns3", "es3", "ns1", "es1"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
 			},
@@ -314,12 +777,14 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 		{
 			name: "No enterprise license, remote ca are not created",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").withRemoteCluster("ns2", "es2").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").build(),
-					fakePublicCa("ns2", "es2"),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: false},
 			},
@@ -353,14 +818,16 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 		{
 			name: "No enterprise license, existing remote ca are left untouched",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").withRemoteCluster("ns2", "es2").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").build(),
-					fakePublicCa("ns2", "es2"),
-					remoteCa("ns1", "es1", "ns2", "es2"),
-					remoteCa("ns2", "es2", "ns1", "es1"),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+						remoteCa("ns1", "es1", "ns2", "es2"),
+						remoteCa("ns2", "es2", "ns1", "es1"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: true},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: false},
 			},
@@ -372,7 +839,7 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 					},
 				},
 			},
-			expectedSecrets: []*corev1.Secret{
+			expectedCASecrets: []*corev1.Secret{
 				remoteCa("ns1", "es1", "ns2", "es2"),
 				remoteCa("ns2", "es2", "ns1", "es1"),
 			},
@@ -382,14 +849,16 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 		{
 			name: "Association is not allowed, existing remote ca are removed",
 			fields: fields{
-				clusters: []client.Object{
-					newClusteBuilder("ns1", "es1").withRemoteCluster("ns2", "es2").build(),
-					fakePublicCa("ns1", "es1"),
-					newClusteBuilder("ns2", "es2").build(),
-					fakePublicCa("ns2", "es2"),
-					remoteCa("ns1", "es1", "ns2", "es2"),
-					remoteCa("ns2", "es2", "ns1", "es1"),
-				},
+				clusters: slices.Concat(
+					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
+					newClusterBuilder("ns2", "es2", "7.0.0").build(),
+					[]client.Object{
+						fakePublicCa("ns1", "es1"),
+						fakePublicCa("ns2", "es2"),
+						remoteCa("ns1", "es1", "ns2", "es2"),
+						remoteCa("ns2", "es2", "ns1", "es1"),
+					},
+				),
 				accessReviewer: &fakeAccessReviewer{allowed: false},
 				licenseChecker: license.MockLicenseChecker{EnterpriseEnabled: true},
 			},
@@ -418,14 +887,23 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := watches.NewDynamicWatches()
-			r := &ReconcileRemoteCa{
-				Client:         k8s.NewFakeClient(tt.fields.clusters...),
+			fakeESClient := &fakeESClient{}
+			if tt.fakeESClient != nil {
+				fakeESClient = tt.fakeESClient
+			}
+			k8sClient := k8s.NewFakeClient(tt.fields.clusters...)
+			r := &ReconcileRemoteClusters{
+				Client:         k8sClient,
 				accessReviewer: tt.fields.accessReviewer,
 				watches:        w,
 				licenseChecker: tt.fields.licenseChecker,
 				recorder:       record.NewFakeRecorder(10),
+				esClientProvider: func(_ context.Context, _ k8s.Client, _ net.Dialer, _ esv1.Elasticsearch) (esclient.Client, error) {
+					return fakeESClient, nil
+				},
 			}
-			got, err := r.Reconcile(context.Background(), tt.args.request)
+			fakeCtx := context.Background()
+			got, err := r.Reconcile(fakeCtx, tt.args.request)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ReconcileRemoteCa.Reconcile() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -434,7 +912,7 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 				t.Errorf("ReconcileRemoteCa.Reconcile() = %v, want %v", got, tt.want)
 			}
 			// Check that expected secrets are here
-			for _, expectedSecret := range tt.expectedSecrets {
+			for _, expectedSecret := range tt.expectedCASecrets {
 				var actualSecret corev1.Secret
 				assert.NoError(t, r.Client.Get(context.Background(), types.NamespacedName{Namespace: expectedSecret.Namespace, Name: expectedSecret.Name}, &actualSecret))
 				// Compare content
@@ -449,7 +927,35 @@ func TestReconcileRemoteCa_Reconcile(t *testing.T) {
 			for _, unexpectedSecret := range tt.unexpectedSecrets {
 				var actualSecret corev1.Secret
 				err := r.Client.Get(context.Background(), types.NamespacedName{Namespace: unexpectedSecret.Namespace, Name: unexpectedSecret.Name}, &actualSecret)
-				assert.True(t, apierrors.IsNotFound(err))
+				assert.True(t, apierrors.IsNotFound(err), "unexpected Secret %s/%s", unexpectedSecret.Namespace, unexpectedSecret.Name)
+			}
+			// Fake ES client assertions
+			assert.Equal(t, tt.wantEsAPICalls.getCrossClusterAPIKeys, fakeESClient.getCrossClusterAPIKeys, "unexpected calls to GetCrossClusterAPIKeys")
+			assert.Equal(t, tt.wantEsAPICalls.invalidateCrossClusterAPIKey, fakeESClient.invalidateCrossClusterAPIKey, "unexpected calls to InvalidateCrossClusterAPIKey")
+			if diff := cmp.Diff(tt.wantEsAPICalls.crossClusterAPIKeyCreateRequests, fakeESClient.crossClusterAPIKeyCreateRequests); len(diff) > 0 {
+				t.Errorf("unexpected calls to CreateCrossClusterAPIKey\n%s\n", diff)
+			}
+			if diff := cmp.Diff(tt.wantEsAPICalls.updateCrossClusterAPIKey, fakeESClient.updateCrossClusterAPIKey); len(diff) > 0 {
+				t.Errorf("unexpected calls to UpdateCrossClusterAPIKey\n%s\n", diff)
+			}
+			// Keystore assertions
+			for _, expectedSecret := range tt.expectedKeystoreSecrets {
+				actualSecret := &corev1.Secret{}
+				if err := k8sClient.Get(fakeCtx, types.NamespacedName{
+					Namespace: expectedSecret.Namespace,
+					Name:      expectedSecret.Name,
+				}, actualSecret); err != nil {
+					t.Fatalf("error while retrieving keystore %s/%s: %v", expectedSecret.Namespace, expectedSecret.Name, err)
+				}
+				if diff := cmp.Diff(expectedSecret.Labels, actualSecret.Labels); len(diff) > 0 {
+					t.Errorf("unexpected labels on Secret %s/%s:\n%s\n", expectedSecret.Namespace, expectedSecret.Name, diff)
+				}
+				if diff := cmp.Diff(expectedSecret.Annotations, actualSecret.Annotations); len(diff) > 0 {
+					t.Errorf("unexpected annotations on Secret %s/%s:\n%s\n", expectedSecret.Namespace, expectedSecret.Name, diff)
+				}
+				if diff := cmp.Diff(expectedSecret.Data, actualSecret.Data); len(diff) > 0 {
+					t.Errorf("unexpected data in Secret %s/%s:\n%s\n", expectedSecret.Namespace, expectedSecret.Name, diff)
+				}
 			}
 		})
 	}

@@ -58,19 +58,6 @@ func (aks *APIKeyStore) KeyIDFor(alias string) string {
 	return aks.aliases[alias].ID
 }
 
-func (aks *APIKeyStore) AliasesFor(namespace, name string) []string {
-	if aks == nil {
-		return nil
-	}
-	aliases := make([]string, 0, len(aks.aliases))
-	for alias, value := range aks.aliases {
-		if value.Namespace == namespace && value.Name == name {
-			aliases = append(aliases, alias)
-		}
-	}
-	return aliases
-}
-
 func LoadAPIKeyStore(ctx context.Context, c k8s.Client, owner *esv1.Elasticsearch) (*APIKeyStore, error) {
 	secretName := types.NamespacedName{
 		Name:      esv1.RemoteAPIKeysSecretName(owner.Name),

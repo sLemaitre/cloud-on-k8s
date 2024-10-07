@@ -58,7 +58,7 @@ func TestLoadAPIKeyStore(t *testing.T) {
 							Namespace: testNamespace,
 							Name:      "myes-es-remote-api-keys",
 							Annotations: map[string]string{
-								"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{ "rc2" : { "namespace" : "ns2", "name" : "es2", "id": "SecretKeyID2" }, "rc1" : {  "namespace" : "ns1", "name" : "es1", "id": "SecretKeyID1" } }`,
+								"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{ "rc2" : { "namespace" : "ns2", "name" : "es2", "id": "SecretKeyID2" }, "rc1" : {  "namespace" : "ns1", "name" : "es1", "id": "SecretKeyID1" } }`,
 							},
 						},
 						Data: map[string][]byte{
@@ -127,10 +127,10 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "1",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc1":{"namespace":"es1","name":"ns1","id":"keyid1"},"rc2":{"namespace":"es1","name":"ns1","id":"keyid2"}}`,
+						"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"rc1":{"namespace":"es1","name":"ns1","id":"keyid1"},"rc2":{"namespace":"es1","name":"ns1","id":"keyid2"}}`,
 					},
 					Labels: map[string]string{
-						"common.k8s.elastic.co/type":                "elasticsearch",
+						"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
 						"eck.k8s.elastic.co/credentials":            "true",
 						"elasticsearch.k8s.elastic.co/cluster-name": "myes",
 					},
@@ -163,7 +163,7 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "1",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc1":"keyid1","rc2":"keyid2"}`,
+						"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"rc1":"keyid1","rc2":"keyid2"}`,
 					},
 					Labels: map[string]string{
 						"common.k8s.elastic.co/type":                "elasticsearch",
@@ -201,10 +201,10 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "1",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc2":{"namespace":"es2","name":"ns2","id":"keyid2"},"rc1":{"namespace":"es1","name":"ns1","id":"keyid1"}}`,
+						"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"rc2":{"namespace":"es2","name":"ns2","id":"keyid2"},"rc1":{"namespace":"es1","name":"ns1","id":"keyid1"}}`,
 					},
 					Labels: map[string]string{
-						"common.k8s.elastic.co/type":                "elasticsearch",
+						"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
 						"eck.k8s.elastic.co/credentials":            "true",
 						"elasticsearch.k8s.elastic.co/cluster-name": "myes",
 					},
@@ -231,10 +231,10 @@ func TestAPIKeyStore_Save(t *testing.T) {
 					Name:            "myes-es-remote-api-keys",
 					ResourceVersion: "2",
 					Annotations: map[string]string{
-						"elasticsearch.k8s.elastic.co/remote-clusters-keys": `{"rc2":{"namespace":"es2","name":"ns2","id":"keyid2"},"rc3_1":{"namespace":"es3","name":"ns3","id":"keyid3_1"},"rc3_2":{"namespace":"es3","name":"ns3","id":"keyid3_2"}}`,
+						"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"rc2":{"namespace":"es2","name":"ns2","id":"keyid2"},"rc3_1":{"namespace":"es3","name":"ns3","id":"keyid3_1"},"rc3_2":{"namespace":"es3","name":"ns3","id":"keyid3_2"}}`,
 					},
 					Labels: map[string]string{
-						"common.k8s.elastic.co/type":                "elasticsearch",
+						"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
 						"eck.k8s.elastic.co/credentials":            "true",
 						"elasticsearch.k8s.elastic.co/cluster-name": "myes",
 					},

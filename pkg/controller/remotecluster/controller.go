@@ -48,7 +48,7 @@ var (
 	defaultRequeue = reconcile.Result{Requeue: true, RequeueAfter: 10 * time.Second}
 )
 
-// Add creates a new RemoteCa Controller and adds it to the manager with default RBAC.
+// Add creates a new ReconcileRemoteClusters Controller and adds it to the manager with default RBAC.
 func Add(mgr manager.Manager, accessReviewer rbac.AccessReviewer, params operator.Parameters) error {
 	r := NewReconciler(mgr, accessReviewer, params)
 	c, err := common.NewController(mgr, name, r, params)
@@ -59,28 +59,30 @@ func Add(mgr manager.Manager, accessReviewer rbac.AccessReviewer, params operato
 }
 
 // NewReconciler returns a new reconcile.Reconciler
-func NewReconciler(mgr manager.Manager, accessReviewer rbac.AccessReviewer, params operator.Parameters) *ReconcileRemoteCa {
+func NewReconciler(mgr manager.Manager, accessReviewer rbac.AccessReviewer, params operator.Parameters) *ReconcileRemoteClusters {
 	c := mgr.GetClient()
-	return &ReconcileRemoteCa{
-		Client:         c,
-		accessReviewer: accessReviewer,
-		watches:        watches.NewDynamicWatches(),
-		recorder:       mgr.GetEventRecorderFor(name),
-		licenseChecker: license.NewLicenseChecker(c, params.OperatorNamespace),
-		Parameters:     params,
+	return &ReconcileRemoteClusters{
+		Client:           c,
+		accessReviewer:   accessReviewer,
+		watches:          watches.NewDynamicWatches(),
+		recorder:         mgr.GetEventRecorderFor(name),
+		licenseChecker:   license.NewLicenseChecker(c, params.OperatorNamespace),
+		Parameters:       params,
+		esClientProvider: commonesclient.NewClient,
 	}
 }
 
-var _ reconcile.Reconciler = &ReconcileRemoteCa{}
+var _ reconcile.Reconciler = &ReconcileRemoteClusters{}
 
-// ReconcileRemoteCa reconciles remote CA Secrets.
-type ReconcileRemoteCa struct {
+// ReconcileRemoteClusters reconciles remote clusters Secrets and API Keys.
+type ReconcileRemoteClusters struct {
 	k8s.Client
 	operator.Parameters
-	accessReviewer rbac.AccessReviewer
-	recorder       record.EventRecorder
-	watches        watches.DynamicWatches
-	licenseChecker license.Checker
+	accessReviewer   rbac.AccessReviewer
+	recorder         record.EventRecorder
+	watches          watches.DynamicWatches
+	licenseChecker   license.Checker
+	esClientProvider commonesclient.Provider
 
 	// iteration is the number of times this controller has run its Reconcile method
 	iteration uint64
@@ -88,7 +90,7 @@ type ReconcileRemoteCa struct {
 
 // Reconcile reads that state of the cluster for the expected remote clusters in this Kubernetes cluster.
 // It copies the remote CA Secrets so they can be trusted by every peer Elasticsearch clusters.
-func (r *ReconcileRemoteCa) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+func (r *ReconcileRemoteClusters) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	ctx = common.NewReconciliationContext(ctx, &r.iteration, r.Tracer, name, "es_name", request)
 	defer common.LogReconciliationRun(ulog.FromContext(ctx))()
 	defer tracing.EndContextTransaction(ctx)
@@ -111,7 +113,7 @@ func (r *ReconcileRemoteCa) Reconcile(ctx context.Context, request reconcile.Req
 }
 
 // deleteAllRemoteCa deletes all associated remote certificate authorities
-func deleteAllRemoteCa(ctx context.Context, r *ReconcileRemoteCa, es types.NamespacedName) (reconcile.Result, error) {
+func deleteAllRemoteCa(ctx context.Context, r *ReconcileRemoteClusters, es types.NamespacedName) (reconcile.Result, error) {
 	span, _ := apm.StartSpan(ctx, "delete_all_remote_ca", tracing.SpanTypeApp)
 	defer span.End()
 
@@ -130,7 +132,7 @@ func deleteAllRemoteCa(ctx context.Context, r *ReconcileRemoteCa, es types.Names
 
 func doReconcile(
 	ctx context.Context,
-	r *ReconcileRemoteCa,
+	r *ReconcileRemoteClusters,
 	localEs *esv1.Elasticsearch,
 ) (reconcile.Result, error) {
 	log := ulog.FromContext(ctx)
@@ -179,7 +181,7 @@ func doReconcile(
 			return results.WithResult(defaultRequeue).Aggregate()
 		}
 		// Create a new client
-		newEsClient, err := commonesclient.NewClient(ctx, r.Client, r.Dialer, *localEs)
+		newEsClient, err := r.esClientProvider(ctx, r.Client, r.Dialer, *localEs)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -204,12 +206,20 @@ func doReconcile(
 			}
 			return reconcile.Result{}, err
 		}
+		log := log.WithValues(
+			"local_namespace", localEs.Namespace,
+			"local_name", localEs.Name,
+			"remote_namespace", remoteEs.Namespace,
+			"remote_name", remoteEs.Name,
+		)
 		accessAllowed, err := isRemoteClusterAssociationAllowed(ctx, r.accessReviewer, localEs, remoteEs, r.recorder)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		// if the remote CA exists but isn't allowed anymore, it will be deleted next
 		if !accessAllowed {
+			// Remove from the expected remote cluster, so that any API Key is also removed.
+			delete(expectedRemoteClusters, remoteEsKey)
 			continue
 		}
 		delete(remoteClustersInvolved, remoteEsKey)
@@ -225,14 +235,19 @@ func doReconcile(
 			continue
 		}
 
+		if !clientClusterSupportClusterAPIKeys.IsSet() {
+			log.Info("Client cluster version is not available in status yet, skipping API keys reconciliation")
+			continue
+		}
+
+		if !localClusterSupportClusterAPIKeys.IsSet() {
+			log.Info("Cluster version is not available in status yet, skipping API keys reconciliation")
+			continue
+		}
+
 		if clientClusterSupportClusterAPIKeys.IsFalse() && localClusterSupportClusterAPIKeys.IsTrue() {
 			err := fmt.Errorf("client cluster %s/%s is running version %s which does not support remote cluster keys", remoteEs.Namespace, remoteEs.Name, remoteEs.Spec.Version)
-			log.Error(err, "cannot configure remote cluster settings",
-				"local_namespace", localEs.Namespace,
-				"local_name", localEs.Name,
-				"remote_namespace", remoteEs.Namespace,
-				"remote_name", remoteEs.Name,
-			)
+			log.Error(err, "cannot configure remote cluster settings")
 			continue
 		}
 		// Reconcile the API Keys.

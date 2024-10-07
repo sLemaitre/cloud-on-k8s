@@ -34,22 +34,23 @@ func reconcileAPIKeys(
 		return err
 	}
 
-	log := ulog.FromContext(ctx)
+	log := ulog.FromContext(ctx).WithValues("local_namespace", reconciledES.Namespace,
+		"local_name", reconciledES.Name,
+		"remote_namespace", clientES.Namespace,
+		"remote_name", clientES.Name)
 	// Maintain a list of the expected API keys to detect the ones which are no longer expected in the reconciled cluster.
 	expectedKeys := sets.New[string]()
+	activeAPIKeysnames := activeAPIKeys.KeyNames()
 	for _, remoteCluster := range remoteClusters {
 		apiKeyName := fmt.Sprintf("eck-%s-%s-%s", clientES.Namespace, clientES.Name, remoteCluster.Name)
 		expectedKeys.Insert(apiKeyName)
 		if remoteCluster.APIKey == nil {
-			// This cluster is not configure with API keys, attempt to invalidate any key and continue.
-			log.Info("Invalidating API key as remote cluster is not configured to use it",
-				"local_namespace", reconciledES.Namespace,
-				"local_name", reconciledES.Name,
-				"remote_namespace", clientES.Namespace,
-				"remote_name", clientES.Name,
-				"alias", remoteCluster.Name)
-			if err := esClient.InvalidateCrossClusterAPIKey(ctx, apiKeyName); err != nil {
-				return err
+			if activeAPIKeysnames.Has(apiKeyName) {
+				// This cluster is not configure with API keys, attempt to invalidate any key and continue.
+				log.Info("Invalidating API key as remote cluster is not configured to use it", "alias", remoteCluster.Name)
+				if err := esClient.InvalidateCrossClusterAPIKey(ctx, apiKeyName); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -58,24 +59,12 @@ func reconcileAPIKeys(
 		// 2.1 If not exist create it in the reconciled cluster.
 		expectedHash := hash.HashObject(remoteCluster.APIKey)
 		if activeAPIKey == nil {
-			log.Info("Creating API key",
-				"local_namespace", reconciledES.Namespace,
-				"local_name", reconciledES.Name,
-				"remote_namespace", clientES.Namespace,
-				"remote_name", clientES.Name,
-				"alias", remoteCluster.Name,
-				"key", apiKeyName)
+			log.Info("Creating API key", "alias", remoteCluster.Name, "key", apiKeyName)
 			apiKey, err := esClient.CreateCrossClusterAPIKey(ctx, esclient.CrossClusterAPIKeyCreateRequest{
 				Name: apiKeyName,
 				CrossClusterAPIKeyUpdateRequest: esclient.CrossClusterAPIKeyUpdateRequest{
 					RemoteClusterAPIKey: *remoteCluster.APIKey,
-					Metadata: map[string]interface{}{
-						"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
-						"elasticsearch.k8s.elastic.co/name":        clientES.Name,
-						"elasticsearch.k8s.elastic.co/namespace":   clientES.Namespace,
-						"elasticsearch.k8s.elastic.co/uid":         clientES.UID,
-						"elasticsearch.k8s.elastic.co/managed-by":  "eck",
-					},
+					Metadata:            newMetadataFor(clientES, expectedHash),
 				},
 			})
 			if err != nil {
@@ -89,13 +78,7 @@ func reconcileAPIKeys(
 			if apiKeyStore.KeyIDFor(remoteCluster.Name) != activeAPIKey.ID {
 				// We have a problem here, the API Key ID in Elasticsearch does not match the API Key recorded in the Secret.
 				// Invalidate the API Key in ES and requeue
-				log.Info("Invalidating API key as it does not match the one in keystore",
-					"local_namespace", reconciledES.Namespace,
-					"local_name", reconciledES.Name,
-					"remote_namespace", clientES.Namespace,
-					"remote_name", clientES.Name,
-					"alias", remoteCluster.Name,
-					"key", apiKeyName)
+				log.Info("Invalidating API key as it does not match the one in keystore", "alias", remoteCluster.Name, "key", apiKeyName)
 				if err := esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name); err != nil {
 					return err
 				}
@@ -103,22 +86,11 @@ func reconcileAPIKeys(
 			}
 			currentHash := activeAPIKey.Metadata["elasticsearch.k8s.elastic.co/config-hash"]
 			if currentHash != expectedHash {
-				log.Info("Updating API key",
-					"local_namespace", reconciledES.Namespace,
-					"local_name", reconciledES.Name,
-					"remote_namespace", clientES.Namespace,
-					"remote_name", clientES.Name,
-					"alias", remoteCluster.Name)
+				log.Info("Updating API key", "alias", remoteCluster.Name)
 				// Update the Key
 				_, err := esClient.UpdateCrossClusterAPIKey(ctx, activeAPIKey.ID, esclient.CrossClusterAPIKeyUpdateRequest{
 					RemoteClusterAPIKey: *remoteCluster.APIKey,
-					Metadata: map[string]interface{}{
-						"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
-						"elasticsearch.k8s.elastic.co/name":        clientES.Name,
-						"elasticsearch.k8s.elastic.co/namespace":   clientES.Namespace,
-						"elasticsearch.k8s.elastic.co/uid":         clientES.UID,
-						"elasticsearch.k8s.elastic.co/managed-by":  "eck",
-					},
+					Metadata:            newMetadataFor(clientES, expectedHash),
 				})
 				if err != nil {
 					return err
@@ -135,12 +107,7 @@ func reconcileAPIKeys(
 	for keyName := range activeAPIKeysForClientCluster.KeyNames() {
 		if !expectedKeys.Has(keyName) {
 			// Unexpected key let's invalidate it.
-			log.Info("Invalidating API key as it does not match the one in keystore",
-				"local_namespace", reconciledES.Namespace,
-				"local_name", reconciledES.Name,
-				"remote_namespace", clientES.Namespace,
-				"remote_name", clientES.Name,
-				"key", keyName)
+			log.Info("Invalidating API key as it does not match the one in keystore", "key", keyName)
 			if err := esClient.InvalidateCrossClusterAPIKey(ctx, keyName); err != nil {
 				return err
 			}
@@ -152,4 +119,14 @@ func reconcileAPIKeys(
 		return err
 	}
 	return nil
+}
+
+func newMetadataFor(clientES *esv1.Elasticsearch, expectedHash string) map[string]interface{} {
+	return map[string]interface{}{
+		"elasticsearch.k8s.elastic.co/config-hash": expectedHash,
+		"elasticsearch.k8s.elastic.co/name":        clientES.Name,
+		"elasticsearch.k8s.elastic.co/namespace":   clientES.Namespace,
+		"elasticsearch.k8s.elastic.co/uid":         clientES.UID,
+		"elasticsearch.k8s.elastic.co/managed-by":  "eck",
+	}
 }
