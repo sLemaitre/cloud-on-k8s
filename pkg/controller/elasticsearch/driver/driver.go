@@ -8,11 +8,13 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
-	errors2 "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	"strings"
 	"time"
+
+	errors2 "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+
+	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"

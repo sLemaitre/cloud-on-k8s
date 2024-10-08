@@ -7,10 +7,12 @@ package remotecluster
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/sets"
+
 	commonesclient "github.com/elastic/cloud-on-k8s/v2/pkg/controller/common/esclient"
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/services"
-	"k8s.io/apimachinery/pkg/util/sets"
-	"time"
 
 	"go.elastic.co/apm/v2"
 	corev1 "k8s.io/api/core/v1"

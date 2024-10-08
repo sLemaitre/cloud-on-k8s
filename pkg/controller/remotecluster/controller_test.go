@@ -6,12 +6,13 @@ package remotecluster
 
 import (
 	"context"
-	"github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/uuid"
 	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/uuid"
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -200,7 +201,7 @@ func TestRemoteCluster_Reconcile(t *testing.T) {
 			//   * ns3/es3: new cluster, API key must be created
 			//   * ns4/es4: existing remote cluster: one key must be updated, the other one must be deleted.
 			//   * ns/es5: this cluster no long exists, key must be deleted.
-			name: "With API Keys",
+			name: "With API Keys, complex topology",
 			fields: fields{
 				clusters: slices.Concat(
 					// Clusters

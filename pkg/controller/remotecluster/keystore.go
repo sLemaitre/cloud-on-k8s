@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"regexp"
+
+	"k8s.io/apimachinery/pkg/util/sets"
+
+	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"

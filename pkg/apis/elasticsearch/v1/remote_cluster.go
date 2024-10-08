@@ -45,7 +45,7 @@ func (es *Elasticsearch) HasRemoteClusterAPIKey() bool {
 // RemoteClusterAPIKey defines a remote cluster API Key.
 type RemoteClusterAPIKey struct {
 	// Expiration date. If set the key is automatically renewed by ECK.
-	//Expiration *metav1.Duration `json:"name,omitempty"`
+	// Expiration *metav1.Duration `json:"name,omitempty"`
 
 	// Access is the name of the API Key. It is automatically generated if not set or empty.
 	// +kubebuilder:validation:Required

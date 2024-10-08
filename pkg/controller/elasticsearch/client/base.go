@@ -94,7 +94,7 @@ func (c *baseClient) get(ctx context.Context, pathWithQuery string, out interfac
 	return c.request(ctx, http.MethodGet, pathWithQuery, nil, out, nil)
 }
 
-func (c *baseClient) put(ctx context.Context, pathWithQuery string, in, out interface{}) error { //nolint:unparam
+func (c *baseClient) put(ctx context.Context, pathWithQuery string, in, out interface{}) error {
 	return c.request(ctx, http.MethodPut, pathWithQuery, in, out, nil)
 }
 

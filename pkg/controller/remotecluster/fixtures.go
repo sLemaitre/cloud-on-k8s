@@ -7,8 +7,10 @@ package remotecluster
 import (
 	"context"
 	"fmt"
-	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/label"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/label"
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -139,7 +141,6 @@ func (cb *clusterBuilder) build() []client.Object {
 			},
 		},
 	}
-
 }
 
 type fakeAccessReviewer struct {

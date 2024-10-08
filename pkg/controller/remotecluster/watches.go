@@ -7,6 +7,7 @@ package remotecluster
 import (
 	"context"
 	"fmt"
+
 	"github.com/elastic/cloud-on-k8s/v2/pkg/controller/elasticsearch/label"
 
 	corev1 "k8s.io/api/core/v1"
