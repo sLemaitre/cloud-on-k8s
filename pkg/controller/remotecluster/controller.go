@@ -117,12 +117,12 @@ func deleteAllRemoteCa(ctx context.Context, r *ReconcileRemoteClusters, es types
 	span, _ := apm.StartSpan(ctx, "delete_all_remote_ca", tracing.SpanTypeApp)
 	defer span.End()
 
-	remoteClusters, err := remoteClustersInvolvedWith(ctx, r.Client, es)
+	associatedCAs, err := getAssociatedRemoteCAs(ctx, r.Client, es)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 	results := &reconciler.Results{}
-	for remoteCluster := range remoteClusters {
+	for remoteCluster := range associatedCAs {
 		if err := deleteCertificateAuthorities(ctx, r, es, remoteCluster); err != nil {
 			results.WithError(err)
 		}
@@ -157,9 +157,9 @@ func doReconcile(
 	}
 
 	// Get all the clusters to which this reconciled cluster is connected to according to the existing remote CAs.
-	// remoteClustersInvolved is used to delete the CA certificates and cancel any trust relationships
+	// associatedRemoteCAs is used to delete the CA certificates and cancel any trust relationships
 	// that may have existed in the past but should not exist anymore.
-	remoteClustersInvolved, err := remoteClustersInvolvedWith(ctx, r.Client, localClusterKey)
+	associatedRemoteCAs, err := getAssociatedRemoteCAs(ctx, r.Client, localClusterKey)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -195,13 +195,19 @@ func doReconcile(
 		activeAPIKeys = getCrossClusterAPIKeys
 	}
 
-	// Create or update expected remote CA
+	// Main loop to:
+	// 1. Create or update expected remote CA.
+	// 2. Create or update API keys and keystores.
+	// apiKeyReconciledRemoteClusters is used to track all the client clusters for which API keys have already been reconciled.
+	apiKeyReconciledRemoteClusters := sets.New[types.NamespacedName]()
 	for remoteEsKey, remoteClusters := range expectedRemoteClusters {
 		// Get the remote/client Elasticsearch cluster associated with this local/reconciled cluster.
 		remoteEs := &esv1.Elasticsearch{}
 		if err := r.Client.Get(ctx, remoteEsKey, remoteEs); err != nil {
 			if errors.IsNotFound(err) {
-				// Remote cluster does not exist, skip it
+				// Remote cluster does not exist, invalidate API keys for that client cluster.
+				apiKeyReconciledRemoteClusters.Insert(remoteEsKey)
+				results.WithError(reconcileAPIKeys(ctx, r.Client, activeAPIKeys, localEs, remoteEs, nil, esClient))
 				continue
 			}
 			return reconcile.Result{}, err
@@ -218,11 +224,14 @@ func doReconcile(
 		}
 		// if the remote CA exists but isn't allowed anymore, it will be deleted next
 		if !accessAllowed {
-			// Remove from the expected remote cluster, so that any API Key is also removed.
+			// Remove from the expected remote cluster to clean up local keystore.
 			delete(expectedRemoteClusters, remoteEsKey)
+			// Invalidate API keys for that client cluster.
+			apiKeyReconciledRemoteClusters.Insert(remoteEsKey)
+			results.WithError(reconcileAPIKeys(ctx, r.Client, activeAPIKeys, localEs, remoteEs, nil, esClient))
 			continue
 		}
-		delete(remoteClustersInvolved, remoteEsKey)
+		delete(associatedRemoteCAs, remoteEsKey)
 		results.WithResults(createOrUpdateCertificateAuthorities(ctx, r, localEs, remoteEs))
 		if results.HasError() {
 			return results.Aggregate()
@@ -251,6 +260,7 @@ func doReconcile(
 			continue
 		}
 		// Reconcile the API Keys.
+		apiKeyReconciledRemoteClusters.Insert(remoteEsKey)
 		results.WithError(reconcileAPIKeys(ctx, r.Client, activeAPIKeys, localEs, remoteEs, remoteClusters, esClient))
 	}
 
@@ -264,18 +274,19 @@ func doReconcile(
 				results.WithError(err)
 				continue
 			}
-			if _, exists := expectedRemoteClusters[clientCluster]; exists {
+			if _, exists := apiKeyReconciledRemoteClusters[clientCluster]; exists {
+				// API keys for that client cluster have already been reconciled, skip.
 				continue
 			}
-			// Unexpected API Key
-			log.Info(fmt.Sprintf("Invalidating unexpected API key %s", activeAPIKey.Name))
+			// This API key in the local cluster state belongs to an unknown cluster which is not expected and has not been reconciled.
+			log.Info(fmt.Sprintf("Invalidating API key %s which belongs to unknown cluster %s", activeAPIKey.Name, clientCluster))
 			results.WithError(esClient.InvalidateCrossClusterAPIKey(ctx, activeAPIKey.Name))
 		}
 
 		// *********************************************
 		// Delete unexpected keys in the local keystore.
 		// *********************************************
-		expectedAliases := expectedAliases(localEs.Spec.RemoteClusters)
+		expectedAliases := expectedAliases(localEs, expectedRemoteClusters)
 		apiKeyStore, err := LoadAPIKeyStore(ctx, r.Client, localEs)
 		if err != nil {
 			return results.WithError(err).Aggregate()
@@ -293,7 +304,7 @@ func doReconcile(
 	}
 
 	// Delete existing but not expected remote CA
-	for toDelete := range remoteClustersInvolved {
+	for toDelete := range associatedRemoteCAs {
 		log.V(1).Info("Deleting remote CA",
 			"local_namespace", localEs.Namespace,
 			"local_name", localEs.Name,
@@ -305,9 +316,17 @@ func doReconcile(
 	return results.WithResult(association.RequeueRbacCheck(r.accessReviewer)).Aggregate()
 }
 
-func expectedAliases(remoteClusters []esv1.RemoteCluster) sets.Set[string] {
+func expectedAliases(
+	localCluster *esv1.Elasticsearch,
+	expectedRemoteCluster map[types.NamespacedName][]esv1.RemoteCluster,
+) sets.Set[string] {
 	aliases := sets.New[string]()
-	for _, remoteCluster := range remoteClusters {
+	for _, remoteCluster := range localCluster.Spec.RemoteClusters {
+		clientClusterNamespacedName := remoteCluster.ElasticsearchRef.WithDefaultNamespace(localCluster.Namespace).NamespacedName()
+		if _, ok := expectedRemoteCluster[clientClusterNamespacedName]; !ok {
+			// Not expected, might have been filtered by RBAC rules
+			continue
+		}
 		if remoteCluster.APIKey == nil {
 			// Not using remote cluster server.
 			continue
@@ -366,13 +385,13 @@ func getExpectedRemoteClusters(
 	return expectedRemoteClusters, nil
 }
 
-// remoteClustersInvolvedWith returns for a given Elasticsearch cluster all the Elasticsearch keys for which
+// getAssociatedRemoteCAs returns for a given Elasticsearch cluster all the Elasticsearch keys for which
 // the remote certificate authorities have been copied, i.e. all the other Elasticsearch clusters for which this cluster
 // has been involved in a remote cluster association.
 // In order to get all of them we:
 // 1. List all the remote CA copied locally.
 // 2. List all the other Elasticsearch clusters for which the CA of the given cluster has been copied.
-func remoteClustersInvolvedWith(
+func getAssociatedRemoteCAs(
 	ctx context.Context,
 	c k8s.Client,
 	es types.NamespacedName,

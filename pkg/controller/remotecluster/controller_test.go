@@ -62,7 +62,7 @@ func TestRemoteCluster_Reconcile(t *testing.T) {
 		expectedKeystoreSecrets []*corev1.Secret
 	}{
 		{
-			name: "Simple remote cluster ns1/es1 -> ns2/es2",
+			name: "Simple remote cluster ns1/es1 -> ns2/es2, ns1",
 			fields: fields{
 				clusters: slices.Concat(
 					newClusterBuilder("ns1", "es1", "7.0.0").withRemoteCluster("ns2", "es2").build(),
@@ -176,18 +176,18 @@ func TestRemoteCluster_Reconcile(t *testing.T) {
 					// Keystore for es2 must be updated.
 					ObjectMeta: metav1.ObjectMeta{
 						Annotations: map[string]string{
-							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"eck-ns2-es2-generated-ns1-es1-0-with-api-key-1"}}`,
+							"elasticsearch.k8s.elastic.co/remote-cluster-api-keys": `{"generated-ns1-es1-0-with-api-key":{"namespace":"ns1","name":"es1","id":"eck-ns1-es2-generated-ns1-es1-0-with-api-key-1"}}`,
 						},
 						Labels: map[string]string{
 							"common.k8s.elastic.co/type":                "remote-cluster-api-keys",
 							"eck.k8s.elastic.co/credentials":            "true",
 							"elasticsearch.k8s.elastic.co/cluster-name": "es2",
 						},
-						Namespace: "ns2",
+						Namespace: "ns1",
 						Name:      "es2-es-remote-api-keys",
 					},
 					Data: map[string][]byte{
-						"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-eck-ns2-es2-generated-ns1-es1-0-with-api-key-1"),
+						"cluster.remote.generated-ns1-es1-0-with-api-key.credentials": []byte("encoded-key-for-eck-ns1-es2-generated-ns1-es1-0-with-api-key-1"),
 					},
 				},
 			},
@@ -621,7 +621,7 @@ func TestRemoteCluster_Reconcile(t *testing.T) {
 			},
 			wantEsAPICalls: wantEsAPICalls{
 				getCrossClusterAPIKeys:       []string{"eck-*"},
-				invalidateCrossClusterAPIKey: []string{"eck-ns4-es4-generated-ns1-es1-0-with-api-key", "eck-ns5-es5-generated-ns1-es1-0-with-api-key", "eck-ns4-es4-to-ns1-es1-0-old-alias"},
+				invalidateCrossClusterAPIKey: []string{"eck-ns4-es4-generated-ns1-es1-0-with-api-key", "eck-ns4-es4-to-ns1-es1-0-old-alias", "eck-ns5-es5-generated-ns1-es1-0-with-api-key"},
 				// No update allowed.
 				updateCrossClusterAPIKey: nil,
 				// No creation allowed.

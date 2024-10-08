@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -200,4 +201,17 @@ func (aks *APIKeyStore) IsEmpty() bool {
 		return true
 	}
 	return len(aks.aliases) == 0
+}
+
+func (aks *APIKeyStore) ForCluster(namespace string, name string) sets.Set[string] {
+	aliases := sets.New[string]()
+	if aks == nil {
+		return aliases
+	}
+	for alias, c := range aks.aliases {
+		if c.Name == name && c.Namespace == namespace {
+			aliases.Insert(alias)
+		}
+	}
+	return aliases
 }

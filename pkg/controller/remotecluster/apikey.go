@@ -40,10 +40,13 @@ func reconcileAPIKeys(
 		"remote_name", clientES.Name)
 	// Maintain a list of the expected API keys to detect the ones which are no longer expected in the reconciled cluster.
 	expectedKeys := sets.New[string]()
+	// Same for the aliases
+	expectedAliases := sets.New[string]()
 	activeAPIKeysnames := activeAPIKeys.KeyNames()
 	for _, remoteCluster := range remoteClusters {
 		apiKeyName := fmt.Sprintf("eck-%s-%s-%s", clientES.Namespace, clientES.Name, remoteCluster.Name)
 		expectedKeys.Insert(apiKeyName)
+		expectedAliases.Insert(remoteCluster.Name)
 		if remoteCluster.APIKey == nil {
 			if activeAPIKeysnames.Has(apiKeyName) {
 				// This cluster is not configure with API keys, attempt to invalidate any key and continue.
@@ -99,7 +102,7 @@ func reconcileAPIKeys(
 		}
 	}
 
-	// Delete all the keys related to that local cluster which are not expected.
+	// Invalidate all the keys related to that local cluster which are not expected.
 	activeAPIKeysForClientCluster, err := activeAPIKeys.ForCluster(clientES.Namespace, clientES.Name)
 	if err != nil {
 		return err
@@ -112,6 +115,15 @@ func reconcileAPIKeys(
 				return err
 			}
 		}
+	}
+
+	// Delete all the keys in the keystore which are not expected
+	aliases := apiKeyStore.ForCluster(reconciledES.Namespace, reconciledES.Name)
+	for existingAlias := range aliases {
+		if expectedAliases.Has(existingAlias) {
+			continue
+		}
+		apiKeyStore.Delete(existingAlias)
 	}
 
 	// Save the generated keys in the keystore.
