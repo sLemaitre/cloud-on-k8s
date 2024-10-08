@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	errors2 "k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	commonv1 "github.com/elastic/cloud-on-k8s/v2/pkg/apis/common/v1"
@@ -154,22 +154,26 @@ func (d *defaultDriver) Reconcile(ctx context.Context) *reconciler.Results {
 		return results.WithError(err)
 	}
 
+	// Remote Cluster Server (RCS2) Kubernetes Service reconciliation.
 	if d.ES.Spec.RemoteClusterServer.Enabled {
+		// Remote Cluster Server is enabled, ensure that the related Kubernetes Service does exist.
 		if _, err := common.ReconcileService(ctx, d.Client, services.NewRemoteClusterService(d.ES), &d.ES); err != nil {
 			results.WithError(err)
 		}
 	} else {
-		// Ensure service is deleted deleted.
+		// Ensure that remote cluster Service does not exist.
 		remoteClusterService := &corev1.Service{}
 		remoteClusterServiceName := types.NamespacedName{
 			Name:      services.RemoteClusterServiceName(d.ES.Name),
 			Namespace: d.ES.Namespace,
 		}
 		if err := d.Client.Get(ctx, remoteClusterServiceName, remoteClusterService); err != nil {
-			if !errors2.IsNotFound(err) {
+			if !k8serrors.IsNotFound(err) {
 				results.WithError(err)
 			}
 		} else {
+			// Remote cluster Service has been found but is not expected.
+			log.Info("Deleting remote cluster Service")
 			results.WithError(d.Client.Delete(ctx, remoteClusterService))
 		}
 	}
@@ -404,6 +408,7 @@ func (d *defaultDriver) Reconcile(ctx context.Context) *reconciler.Results {
 	return results.WithResults(d.reconcileNodeSpecs(ctx, esReachable, esClient, d.ReconcileState, *resourcesState, keystoreResources))
 }
 
+// apiKeyStoreSecretSource returns the Secret that holds the remote API keys, and which should be used as a secure settings source.
 func apiKeyStoreSecretSource(ctx context.Context, es *esv1.Elasticsearch, c k8s.Client) ([]commonv1.NamespacedSecretSource, error) {
 	// Check if Secret exists
 	secretName := types.NamespacedName{
@@ -411,7 +416,7 @@ func apiKeyStoreSecretSource(ctx context.Context, es *esv1.Elasticsearch, c k8s.
 		Namespace: es.Namespace,
 	}
 	if err := c.Get(ctx, secretName, &corev1.Secret{}); err != nil {
-		if errors2.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, err

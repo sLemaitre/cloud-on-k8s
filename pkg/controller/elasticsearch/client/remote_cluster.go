@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 
@@ -20,14 +19,14 @@ type RemoteClusterClient interface {
 	UpdateRemoteClusterSettings(context.Context, RemoteClustersSettings) error
 	// GetRemoteClusterSettings retrieves the remote clusters of a cluster.
 	GetRemoteClusterSettings(context.Context) (RemoteClustersSettings, error)
-	// CreateCrossClusterAPIKey creates a new cross cluster API Key.
+	// CreateCrossClusterAPIKey creates a new cross cluster API Key using the provided cross cluster API key request.
 	CreateCrossClusterAPIKey(context.Context, CrossClusterAPIKeyCreateRequest) (CrossClusterAPIKeyCreateResponse, error)
-	// UpdateCrossClusterAPIKey updates the cluster API Key with the provided ID.
+	// UpdateCrossClusterAPIKey updates the cluster API Key which matches the provided ID using the provided update request.
 	UpdateCrossClusterAPIKey(context.Context, string, CrossClusterAPIKeyUpdateRequest) (CrossClusterAPIKeyUpdateResponse, error)
 	// InvalidateCrossClusterAPIKey invalidates a cluster API Key by its name.
 	InvalidateCrossClusterAPIKey(context.Context, string) error
-	// GetCrossClusterAPIKeys attempts to retrieve Cross Cluster API Keys from the remote cluster.
-	// Provided string is used as the "name" parameter in the HTTP query.
+	// GetCrossClusterAPIKeys attempts to retrieve Cross Cluster API Keys.
+	// The provided string is used as the "name" parameter in the HTTP query.
 	// Only active API Keys are included in the response.
 	GetCrossClusterAPIKeys(context.Context, string) (CrossClusterAPIKeyList, error)
 }
@@ -114,20 +113,6 @@ func (cl *CrossClusterAPIKeyList) KeyNames() sets.Set[string] {
 		result.Insert(key.Name)
 	}
 	return result
-}
-
-func (cl *CrossClusterAPIKeyList) GetActiveKey() (*CrossClusterAPIKey, error) {
-	if cl == nil {
-		return nil, errors.New("key list is empty")
-	}
-	if cl.Len() > 1 {
-		return nil, fmt.Errorf("%d active API keys found, only 1 is expected", cl.Len())
-	}
-	if cl.Len() == 0 {
-		return nil, nil
-	}
-	activeAPIKey := cl.APIKeys[0]
-	return &activeAPIKey, nil
 }
 
 // ForCluster returns all the API keys related to a specific client cluster.

@@ -5,7 +5,6 @@
 package services
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -75,8 +74,8 @@ func InternalServiceName(esName string) string {
 	return esv1.InternalHTTPService(esName)
 }
 
-// RemoteClusterServiceName returns the name for the internal service
-// associated to this cluster, managed by the operator exclusively.
+// RemoteClusterServiceName returns the name for the remote cluster service used when the cluster is expected to be accessed
+// using the remote cluster server. Managed by the operator exclusively.
 func RemoteClusterServiceName(esName string) string {
 	return esv1.RemoteClusterService(esName)
 }
@@ -173,47 +172,6 @@ func NewRemoteClusterService(es esv1.Elasticsearch) *corev1.Service {
 			PublishNotReadyAddresses: false,
 		},
 	}
-}
-
-// IsServiceReady checks if a service has one or more ready endpoints.
-func IsServiceReady(c k8s.Client, service corev1.Service) (bool, error) {
-	endpoints := corev1.Endpoints{}
-	namespacedName := types.NamespacedName{Namespace: service.Namespace, Name: service.Name}
-
-	if err := c.Get(context.Background(), namespacedName, &endpoints); err != nil {
-		return false, err
-	}
-	for _, subs := range endpoints.Subsets {
-		if len(subs.Addresses) > 0 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// GetExternalService returns the external service associated to the given Elasticsearch cluster.
-func GetExternalService(c k8s.Client, es esv1.Elasticsearch) (corev1.Service, error) {
-	return getServiceByName(c, es, ExternalServiceName(es.Name))
-}
-
-// GetInternalService returns the internally managed service associated to the given Elasticsearch cluster.
-func GetInternalService(c k8s.Client, es esv1.Elasticsearch) (corev1.Service, error) {
-	return getServiceByName(c, es, InternalServiceName(es.Name))
-}
-
-func getServiceByName(c k8s.Client, es esv1.Elasticsearch, serviceName string) (corev1.Service, error) {
-	var svc corev1.Service
-
-	namespacedName := types.NamespacedName{
-		Namespace: es.Namespace,
-		Name:      serviceName,
-	}
-
-	if err := c.Get(context.Background(), namespacedName, &svc); err != nil {
-		return corev1.Service{}, err
-	}
-
-	return svc, nil
 }
 
 type urlProvider struct {
