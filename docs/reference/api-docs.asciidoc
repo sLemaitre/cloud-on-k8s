@@ -1332,7 +1332,8 @@ ElasticsearchSpec holds the specification of an Elasticsearch cluster.
 | Field | Description
 | *`version`* __string__ | Version of Elasticsearch.
 | *`image`* __string__ | Image is the Elasticsearch Docker image to deploy.
-| *`remoteClusterServer`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterserver[$$RemoteClusterServer$$]__ | RemoteClusterServer specifies is the remote cluster server must be enabled.
+| *`remoteClusterServer`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterserver[$$RemoteClusterServer$$]__ | RemoteClusterServer specifies if the remote cluster server must be enabled.
+This must be enabled if this cluster is a remote cluster which is expected to be accessed using Cross-Cluster API key APIs.
 | *`http`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-common-v1-httpconfig[$$HTTPConfig$$]__ | HTTP holds HTTP layer settings for Elasticsearch.
 | *`transport`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-transportconfig[$$TransportConfig$$]__ | Transport holds transport layer settings for Elasticsearch.
 | *`nodeSets`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-nodeset[$$NodeSet$$] array__ | NodeSets allow specifying groups of Elasticsearch nodes sharing the same configuration and Pod templates.
@@ -1516,7 +1517,7 @@ RemoteCluster declares a remote Elasticsearch cluster connection.
 | *`name`* __string__ | Name is the name of the remote cluster as it is set in the Elasticsearch settings.
 The name is expected to be unique for each remote clusters.
 | *`elasticsearchRef`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-common-v1-localobjectselector[$$LocalObjectSelector$$]__ | ElasticsearchRef is a reference to an Elasticsearch cluster running within the same k8s cluster.
-| *`apiKey`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey[$$RemoteClusterAPIKey$$]__ | 
+| *`apiKey`* __xref:{anchor_prefix}-github-com-elastic-cloud-on-k8s-v2-pkg-apis-elasticsearch-v1-remoteclusterapikey[$$RemoteClusterAPIKey$$]__ | APIKey can be used to enable remote cluster using Cross-Cluster API key API: https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-create-cross-cluster-api-key.html
 |===
 
 

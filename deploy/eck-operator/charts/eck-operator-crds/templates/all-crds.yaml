@@ -4837,8 +4837,9 @@ spec:
                     type: object
                 type: object
               remoteClusterServer:
-                description: RemoteClusterServer specifies is the remote cluster server
-                  must be enabled.
+                description: |-
+                  RemoteClusterServer specifies if the remote cluster server must be enabled.
+                  This must be enabled if this cluster is a remote cluster which is expected to be accessed using Cross-Cluster API key APIs.
                 properties:
                   enabled:
                     type: boolean
@@ -4851,8 +4852,8 @@ spec:
                     connection.
                   properties:
                     apiKey:
-                      description: RemoteClusterAPIKey defines a remote cluster API
-                        Key.
+                      description: 'APIKey can be used to enable remote cluster using
+                        Cross-Cluster API key API: https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-create-cross-cluster-api-key.html'
                       properties:
                         access:
                           description: Access is the name of the API Key. It is automatically

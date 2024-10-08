@@ -60,6 +60,9 @@ const (
 	XPackSecurityRemoteClusterServerSslCertificate            = "xpack.security.remote_cluster_server.ssl.certificate"
 	XPackSecurityRemoteClusterServerSslCertificateAuthorities = "xpack.security.remote_cluster_server.ssl.certificate_authorities"
 
+	XPackSecurityRemoteClusterClientSslKey                    = "xpack.security.remote_cluster_client.ssl.enabled"
+	XPackSecurityRemoteClusterClientSslCertificateAuthorities = "xpack.security.remote_cluster_client.ssl.certificate_authorities"
+
 	XPackLicenseUploadTypes = "xpack.license.upload.types" // supported >= 7.6.0 used as of 7.8.1
 )
 

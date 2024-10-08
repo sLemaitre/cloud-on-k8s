@@ -142,8 +142,8 @@ func xpackConfig(ver version.Version, httpCfg commonv1.HTTPConfig, remoteCluster
 	}
 
 	if remoteClusterClientEnabled {
-		cfg["xpack.security.remote_cluster_client.ssl.enabled"] = true
-		cfg["xpack.security.remote_cluster_client.ssl.certificate_authorities"] = path.Join(volume.RemoteCertificateAuthoritiesSecretVolumeMountPath, certificates.CAFileName)
+		cfg[esv1.XPackSecurityRemoteClusterClientSslKey] = true
+		cfg[esv1.XPackSecurityRemoteClusterClientSslCertificateAuthorities] = path.Join(volume.RemoteCertificateAuthoritiesSecretVolumeMountPath, certificates.CAFileName)
 	}
 
 	// always enable the built-in file and native internal realms for user auth, ordered as first
