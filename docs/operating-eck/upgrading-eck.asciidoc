@@ -30,6 +30,15 @@ CAUTION: When upgrading always ensure that the version of the CRDs installed in 
 === Upgrading from ECK 1.6 or earlier
 
 
+[NOTE]
+================================
+Check your currently installed version.
+You can check this via the currently installed Elastic Operator Image via.
+[source,shell,subs="attributes"]
+----
+kubectl describe -n elastic-system pod elastic-operator
+----
+
 
 Release 1.7.0 moved the link:https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/[CustomResourceDefinitions] (CRD) used by ECK to the v1 version. If you upgrade from a previous version of ECK, the new version of the CRDs replaces the existing CRDs. If you cannot remove the current ECK installation because you have production workloads that must not be deleted, the following approach is recommended.
 
